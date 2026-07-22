@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"dashboard/global/config"
@@ -71,12 +72,45 @@ type gitlabEvent struct {
 	ActionName  string `json:"action_name"`
 	TargetType  string `json:"target_type"`
 	TargetTitle string `json:"target_title"`
+	TargetIID   int    `json:"target_iid"`
 	CreatedAt   string `json:"created_at"`
 	ProjectID   int    `json:"project_id"`
 	PushData    struct {
 		CommitTitle string `json:"commit_title"`
+		CommitTo    string `json:"commit_to"` // 푸시 마지막 커밋 SHA
 		Ref         string `json:"ref"`
 	} `json:"push_data"`
+}
+
+// 프로젝트 id → path_with_namespace 캐시 (events 는 숫자 id 만 줌)
+var gitlabProjectPaths = map[int]string{}
+var gitlabProjectMutex sync.Mutex
+
+func resolveGitlabProjectPath(id int) string {
+	gitlabProjectMutex.Lock()
+	if path, ok := gitlabProjectPaths[id]; ok {
+		gitlabProjectMutex.Unlock()
+		return path
+	}
+	gitlabProjectMutex.Unlock()
+
+	buf, status, err := gitlabGet(fmt.Sprintf("/projects/%d", id))
+	if err != nil || status != http.StatusOK {
+		// 403 insufficient_scope 면 토큰에 read_api 스코프가 없는 것 — 재발급 필요
+		log.Error().Int("project", id).Int("status", status).Msg("gitlab project lookup failed (read_api scope?)")
+		return ""
+	}
+	var parsed struct {
+		PathWithNamespace string `json:"path_with_namespace"`
+	}
+	if err := json.Unmarshal(buf, &parsed); err != nil {
+		return ""
+	}
+
+	gitlabProjectMutex.Lock()
+	gitlabProjectPaths[id] = parsed.PathWithNamespace
+	gitlabProjectMutex.Unlock()
+	return parsed.PathWithNamespace
 }
 
 // fetchGitlabEvents 는 after 이후의 이벤트를 페이지네이션으로 모두 가져온다.
@@ -179,22 +213,37 @@ func FetchGitlabRecent() ([]Activity, error) {
 	var activities []Activity
 	for _, e := range events {
 		a := Activity{Source: "gitlab", Date: e.CreatedAt}
+		path := resolveGitlabProjectPath(e.ProjectID)
+		a.Repo = path
+		projectURL := "https://gitlab.com/" + path
 		switch {
 		case e.PushData.CommitTitle != "":
 			a.Type = "push"
 			a.Title = e.PushData.CommitTitle
+			if path != "" && e.PushData.CommitTo != "" {
+				a.URL = projectURL + "/-/commit/" + e.PushData.CommitTo
+			}
 		case e.TargetType == "MergeRequest":
 			a.Type = "mr"
 			a.Title = e.TargetTitle
+			if path != "" && e.TargetIID > 0 {
+				a.URL = fmt.Sprintf("%s/-/merge_requests/%d", projectURL, e.TargetIID)
+			}
 		case e.TargetType == "Issue":
 			a.Type = "issue"
 			a.Title = e.TargetTitle
+			if path != "" && e.TargetIID > 0 {
+				a.URL = fmt.Sprintf("%s/-/issues/%d", projectURL, e.TargetIID)
+			}
 		default:
 			a.Type = "activity"
 			a.Title = e.ActionName
 			if e.TargetTitle != "" {
 				a.Title = e.TargetTitle
 			}
+		}
+		if a.URL == "" && path != "" {
+			a.URL = projectURL
 		}
 		activities = append(activities, a)
 	}

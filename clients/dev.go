@@ -196,8 +196,8 @@ func sumWindow(calendar []calendarDay, n int) map[string]int {
 	return map[string]int{"github": gh, "gitlab": gl, "all": gh + gl}
 }
 
-// FetchDevRecent 는 github(최대 10)+gitlab(최대 10)을 가져와
-// 합친 뒤 시간순 내림차순 최근 20건을 반환한다.
+// FetchDevRecent 는 github·gitlab 최근 활동 전체를 합쳐
+// 시간순 내림차순 최근 20건을 반환한다 (소스별 컷 없음).
 func FetchDevRecent() ([]byte, error) {
 	ghAct, err := FetchGithubRecent()
 	if err != nil {
@@ -206,13 +206,6 @@ func FetchDevRecent() ([]byte, error) {
 	glAct, err := FetchGitlabRecent()
 	if err != nil {
 		log.Error().Str("source", "gitlab").Msg(err.Error())
-	}
-
-	if len(ghAct) > 10 {
-		ghAct = ghAct[:10]
-	}
-	if len(glAct) > 10 {
-		glAct = glAct[:10]
 	}
 
 	merged := append(ghAct, glAct...)
