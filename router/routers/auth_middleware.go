@@ -38,6 +38,26 @@ func IngestTokenRequired(c *fiber.Ctx) error {
 	return c.Next()
 }
 
+// AnyTokenRequired 는 DASH_TOKEN(Bearer) 또는 HEALTH_INGEST_TOKEN(api-key)
+// 둘 중 하나면 통과 — 웹(배너)과 iOS 단축어가 같은 엔드포인트를 쓰는 알림 API 용.
+func AnyTokenRequired(c *fiber.Ctx) error {
+	token := c.Get("Authorization")
+	const prefix = "Bearer "
+	if len(token) > len(prefix) && token[:len(prefix)] == prefix {
+		token = token[len(prefix):]
+	}
+	if config.DashToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(config.DashToken)) == 1 {
+		return c.Next()
+	}
+
+	apiKey := c.Get("api-key")
+	if config.HealthIngestToken != "" && subtle.ConstantTimeCompare([]byte(apiKey), []byte(config.HealthIngestToken)) == 1 {
+		return c.Next()
+	}
+
+	return errorJSON(c, fiber.StatusUnauthorized, "인증이 필요합니다.")
+}
+
 // errorJSON 은 공통 에러 응답 JSON 을 반환한다.
 func errorJSON(c *fiber.Ctx, status int, message string) error {
 	return c.Status(status).JSON(fiber.Map{

@@ -14,6 +14,7 @@ func SetRouter(r *fiber.App) {
 		return c.JSON(fiber.Map{"code": "ok"})
 	})
 	routers.SetupHealthIngestRoutes(apiGroup) // api-key 자체 인증
+	routers.SetupNotifyRoutes(apiGroup)       // Bearer 또는 api-key 자체 인증
 
 	// 이후 라우트는 전부 DASH_TOKEN Bearer 인증.
 	apiGroup.Use(routers.TokenRequired)
