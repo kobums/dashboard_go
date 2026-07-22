@@ -423,7 +423,7 @@ func Init() {
 		SnippetApiUrl = v
 	}
 	if GithubUsername == "" {
-		GithubUsername = "kobums23"
+		GithubUsername = "kobums"
 	}
 	if SnippetApiUrl == "" {
 		SnippetApiUrl = "https://snippetapi.gowoobro.com/api"
