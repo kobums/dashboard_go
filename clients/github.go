@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"dashboard/global/config"
@@ -111,6 +112,43 @@ func FetchGithubCalendar(from, to time.Time) ([]DayCount, error) {
 	return days, nil
 }
 
+// fetchGithubCommitMessage 는 커밋 SHA 로 메시지 첫 줄을 가져온다 (실패 시 빈 문자열).
+// 결과는 5분 캐시(dev_recent) 뒤에 있으므로 이벤트당 1콜이어도 부담 없다.
+func fetchGithubCommitMessage(repo, sha string) string {
+	req, err := http.NewRequest("GET",
+		fmt.Sprintf("https://api.github.com/repos/%s/commits/%s", repo, sha), nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+config.GithubToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	res, err := githubClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer res.Body.Close()
+	buf, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var parsed struct {
+		Commit struct {
+			Message string `json:"message"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(buf, &parsed); err != nil {
+		return ""
+	}
+	// 여러 줄 커밋 메시지는 제목(첫 줄)만
+	message := parsed.Commit.Message
+	if idx := strings.IndexByte(message, '\n'); idx > 0 {
+		message = message[:idx]
+	}
+	return message
+}
+
 // FetchGithubRecent 는 최근 push/PR/issue 활동을 가져온다.
 func FetchGithubRecent() ([]Activity, error) {
 	if config.GithubToken == "" {
@@ -144,6 +182,7 @@ func FetchGithubRecent() ([]Activity, error) {
 			Commits []struct {
 				Message string `json:"message"`
 			} `json:"commits"`
+			Head        string `json:"head"` // PushEvent 커밋 SHA (commits 배열은 더 이상 안 옴)
 			PullRequest struct {
 				Title   string `json:"title"`
 				HTMLURL string `json:"html_url"`
@@ -170,10 +209,17 @@ func FetchGithubRecent() ([]Activity, error) {
 			a.Type = "push"
 			if len(e.Payload.Commits) > 0 {
 				a.Title = e.Payload.Commits[len(e.Payload.Commits)-1].Message
-			} else {
+			} else if e.Payload.Head != "" {
+				// events API 가 commits 를 더 이상 포함하지 않음 — head SHA 로 메시지 조회
+				a.Title = fetchGithubCommitMessage(e.Repo.Name, e.Payload.Head)
+				a.URL = repoURL + "/commit/" + e.Payload.Head
+			}
+			if a.Title == "" {
 				a.Title = "커밋 푸시"
 			}
-			a.URL = repoURL
+			if a.URL == "" {
+				a.URL = repoURL
+			}
 		case "PullRequestEvent":
 			a.Type = "pr"
 			a.Title = e.Payload.PullRequest.Title
