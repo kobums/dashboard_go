@@ -1,0 +1,7 @@
+.env.yml
+bin/
+dist/
+webdata/
+model.json
+config/model.json
+nohup.out
