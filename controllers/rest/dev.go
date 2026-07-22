@@ -22,7 +22,7 @@ func (c *DevController) Summary(days int) {
 		days = 0
 	}
 	key := fmt.Sprintf("dev_summary_%v", days)
-	buf, err := clients.GetCached(key, 60*time.Minute, func() ([]byte, error) {
+	buf, err := clients.GetCached(key, 5*time.Minute, func() ([]byte, error) {
 		return clients.FetchDevSummary(days)
 	})
 	if err != nil {
@@ -33,7 +33,7 @@ func (c *DevController) Summary(days int) {
 }
 
 func (c *DevController) Recent() {
-	buf, err := clients.GetCached("dev_recent", 60*time.Minute, func() ([]byte, error) {
+	buf, err := clients.GetCached("dev_recent", 5*time.Minute, func() ([]byte, error) {
 		return clients.FetchDevRecent()
 	})
 	if err != nil {
