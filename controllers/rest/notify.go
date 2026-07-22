@@ -47,8 +47,37 @@ var compareOffsets = []struct {
 	{"1년 전", -364},
 }
 
-// Check 는 mode(evening|morning|auto)에 따라 판정한다.
+type notifyResult struct {
+	Mode         string
+	Date         string
+	WeekdayLabel string
+	Notify       bool
+	Alerts       []notifyAlert
+	Summary      string
+}
+
+// Check 는 mode(evening|morning|auto)에 따라 판정하고 JSON 으로 반환한다.
 func (c *NotifyController) Check(mode string) {
+	result := c.runCheck(mode)
+	c.Set("mode", result.Mode)
+	c.Set("date", result.Date)
+	c.Set("weekdayLabel", result.WeekdayLabel)
+	c.Set("notify", result.Notify)
+	c.Set("alerts", result.Alerts)
+	c.Set("summary", result.Summary)
+}
+
+// CheckText 는 iOS 단축어용 — 알림 필요 없으면 빈 문자열, 필요하면 알림 문장만.
+// 단축어가 "값이 있으면 알림 표시" 3개 액션으로 끝나도록 하기 위한 형태.
+func (c *NotifyController) CheckText(mode string) string {
+	result := c.runCheck(mode)
+	if !result.Notify {
+		return ""
+	}
+	return result.Summary
+}
+
+func (c *NotifyController) runCheck(mode string) notifyResult {
 	now := time.Now()
 	if mode != "evening" && mode != "morning" {
 		if now.Hour() < 12 {
@@ -117,12 +146,14 @@ func (c *NotifyController) Check(mode string) {
 		notify = true // 아침은 항상 보고
 	}
 
-	c.Set("mode", mode)
-	c.Set("date", dates[0])
-	c.Set("weekdayLabel", weekdayKo[int(base.Weekday())])
-	c.Set("notify", notify)
-	c.Set("alerts", valid)
-	c.Set("summary", buildSummary(mode, valid, behindCount))
+	return notifyResult{
+		Mode:         mode,
+		Date:         dates[0],
+		WeekdayLabel: weekdayKo[int(base.Weekday())],
+		Notify:       notify,
+		Alerts:       valid,
+		Summary:      buildSummary(mode, valid, behindCount),
+	}
 }
 
 // buildAlert 는 values[0]=기준일, values[1..4]=비교일 값(-1 = 데이터 없음)으로 판정한다.
