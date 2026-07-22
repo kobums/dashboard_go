@@ -5,3 +5,5 @@ webdata/
 model.json
 config/model.json
 nohup.out
+.env
+.claude/
