@@ -48,6 +48,8 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | GET | `/api/dev/summary?days=` | 병합 히트맵+통계. `days=0`(기본): **전체 기간**(백필 포함), 1~400: 해당 일수. 60분 캐시 |
 | GET | `/api/dev/recent` | GitHub+GitLab 최근 활동 병합 상위 20 (60분 캐시) |
 | GET | `/api/dev/yearly` | 연도별 컨트리뷰션 (devstat_tb 로컬 집계, 외부 API 안 씀) |
+| GET | `/api/notify/check?mode=` | **알림 판정** — 걸음·운동·커밋을 전날/전주(같은 요일)/4주 전/1년 전과 비교, 독서는 당일 세션 여부. `evening`=오늘 경고(부족 시만 notify), `morning`=어제 보고(항상), `auto`=시각 기준. 인증: Bearer **또는** api-key |
+| GET | `/api/notify/text?mode=` | 〃 의 **iOS 단축어용 텍스트판** — 알림 불필요면 빈 응답, 필요하면 알림 문장만(plain text). 단축어는 "가져오기→값 있으면→알림 표시" 3액션 |
 
 ## DB (dashboard @ 공용 MariaDB)
 
