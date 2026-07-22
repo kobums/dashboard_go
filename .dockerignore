@@ -1,0 +1,7 @@
+# 시크릿·불필요 파일을 빌드 컨텍스트에서 제외 (이미지 유출 방지)
+.env.yml
+.env.yml.example
+.git
+bin
+webdata
+config/model.json
