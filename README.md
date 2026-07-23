@@ -14,8 +14,8 @@
 main.go               진입점 (config → cache → HTTP)
 services/http.go      Fiber 셋업 · SPA 정적 서빙 + index.html 폴백
 router/router.go      라우트 등록 (인증 구간 구분)
-router/routers/       라우터 — *생성*: workout 등 CRUD / *수기*: reading, health, dev, fitnessstats, auth_middleware
-controllers/rest/     컨트롤러 — *생성*: CRUD / *수기*: reading, healthingest, dev, fitnessstats
+router/routers/       라우터 — *생성*: workout 등 CRUD / *수기*: reading, health, dev, fitnessstats, compare, notify, auth_middleware
+controllers/rest/     컨트롤러 — *생성*: CRUD / *수기*: reading, healthingest, dev, fitnessstats, compare, metrics(공용 수집기), notify
 clients/              외부 연동 (수기): snippet, github, gitlab, dev(집계), cache(SWR), backfill
 models/               *생성* Manager + db.go(쿼리 빌더)
 global/config/        .env.yml 파싱 + 환경변수 오버라이드
@@ -42,13 +42,15 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | POST | `/api/health/shortcut` | **iOS 단축어용** 평평한 JSON `{date?, steps, weight, ...}` — `api-key` 헤더. 값 0/누락 스킵, `"72.4 kg"` 같은 문자열도 파싱, (date,name) upsert 멱등 |
 | GET | `/api/health/metrics?from=&to=&name=` | 일별 지표 시계열 |
 | CRUD | `/api/workout(/:id)` | 운동 기록 (생성 CRUD, `startworkoutdate`/`endworkoutdate` 필터) |
-| GET | `/api/fitness/compare?date=` | **같은 요일 비교** — 기준일/−7d/−28d/−364d(52주). 기준일 데이터 없으면 어제 폴백. null=데이터 없음, 0과 구분 |
+| GET | `/api/compare?date=` | **통합 같은 요일 비교** (운동·독서·개발 공용) — 기준일/전날/−7d/−28d/−364d(52주). 지표: steps·activeEnergy·exerciseMinutes·workout(분·건수)·devCommits·readingMinutes·readingPages. 기준일 데이터 전무하면 어제 폴백. null=데이터 없음, 0과 구분. 응답은 기준일별 5분 메모이즈(stale 반환+백그라운드 갱신) |
 | GET | `/api/fitness/yearly` | 연도별 운동: 세션·시간·거리·칼로리·타입별·월별 + 연평균 걸음 |
 | GET | `/api/reading/summary?year=&month=` | snippetapi 프록시 집계 (10분 캐시) |
+| GET | `/api/reading/daily` | 독서 세션 일별 집계 `[{date, minutes, pages, sessions}]` (10분 캐시) — 잔디·일별/주별 차트용 |
+| GET | `/api/reading/books` | 완독 책 목록 `[{title, author, coverUrl, rating, endDate}]` (10분 캐시) — 연도별 표지 그리드용 |
 | GET | `/api/dev/summary?days=` | 병합 히트맵+통계. `days=0`(기본): **전체 기간**(백필 포함), 1~400: 해당 일수. 60분 캐시 |
 | GET | `/api/dev/recent` | GitHub+GitLab 최근 활동 병합 상위 20 (60분 캐시) |
 | GET | `/api/dev/yearly` | 연도별 컨트리뷰션 (devstat_tb 로컬 집계, 외부 API 안 씀) |
-| GET | `/api/notify/check?mode=` | **알림 판정** — 걸음·운동·커밋을 전날/전주(같은 요일)/4주 전/1년 전과 비교, 독서는 당일 세션 여부. `evening`=오늘 경고(부족 시만 notify), `morning`=어제 보고(항상), `auto`=시각 기준. 인증: Bearer **또는** api-key |
+| GET | `/api/notify/check?mode=` | **알림 판정** — 걸음·운동·커밋·독서(분, 세션 없으면 당일 읽음 여부 폴백)를 전날/전주(같은 요일)/4주 전/1년 전과 비교. `evening`=오늘 경고(부족 시만 notify), `morning`=어제 보고(항상), `auto`=시각 기준. 인증: Bearer **또는** api-key |
 | GET | `/api/notify/text?mode=` | 〃 의 **iOS 단축어용 텍스트판** — 알림 불필요면 빈 응답, 필요하면 알림 문장만(plain text). 단축어는 "가져오기→값 있으면→알림 표시" 3액션 |
 
 ## DB (dashboard @ 공용 MariaDB)
@@ -58,7 +60,7 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | `workout_tb` (w_*) | 운동 기록. source=`manual`/`apple`, externalid=Apple UUID/`hk-*` | externalid 존재 검사 |
 | `healthmetric_tb` (hm_*) | 일별 건강 지표 (steps/weight/...) | UNIQUE(metricdate, name) upsert |
 | `devstat_tb` (ds_*) | 소스·일별 컨트리뷰션 (백필 포함 2019~) | UNIQUE(source, statdate) upsert |
-| `fetchcache_tb` (fc_*) | 외부 API 응답 캐시 (SWR) | UNIQUE(cachekey) |
+| `fetchcache_tb` (fc_*) | 외부 API 응답 캐시 (SWR) — 앞단에 프로세스 인메모리 캐시가 있어 TTL 안 반복 조회는 DB 왕복 없음 | UNIQUE(cachekey) |
 
 ## 설정
 
