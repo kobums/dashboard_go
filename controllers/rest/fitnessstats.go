@@ -8,135 +8,13 @@ import (
 
 	"dashboard/controllers"
 	"dashboard/global/log"
-	"dashboard/models"
 )
 
 type FitnessController struct {
 	controllers.Controller
 }
 
-// comparePoint 는 한 시점의 하루치 운동 지표.
-// 지표 부재(nil)와 0 을 구분하기 위해 포인터를 쓴다.
-type comparePoint struct {
-	Label           string   `json:"label"` // base | week | month | year
-	Date            string   `json:"date"`
-	Steps           *float64 `json:"steps"`
-	ActiveEnergy    *float64 `json:"activeEnergy"`
-	ExerciseMinutes *float64 `json:"exerciseMinutes"`
-	WorkoutCount    int      `json:"workoutCount"`
-	WorkoutMinutes  int      `json:"workoutMinutes"`
-}
-
 var weekdayKo = []string{"일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"}
-
-// Compare 는 기준일과 7/28/364일 전(전부 같은 요일)의 지표를 비교한다.
-// 기준일에 지표가 하나도 없으면 어제로 폴백한다.
-func (c *FitnessController) Compare(dateStr string) {
-	base, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
-	if err != nil {
-		base = time.Now()
-	}
-	base = time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, time.Local)
-
-	conn := c.NewConnection()
-
-	points := buildComparePoints(conn, base)
-
-	// 기준일 폴백: 지표·운동이 전무하면 어제 기준으로 다시
-	basePoint := points[0]
-	if basePoint.Steps == nil && basePoint.ActiveEnergy == nil &&
-		basePoint.ExerciseMinutes == nil && basePoint.WorkoutCount == 0 {
-		base = base.AddDate(0, 0, -1)
-		points = buildComparePoints(conn, base)
-	}
-
-	c.Set("baseDate", base.Format("2006-01-02"))
-	c.Set("weekdayLabel", weekdayKo[int(base.Weekday())])
-	c.Set("points", points)
-}
-
-func buildComparePoints(conn *models.Connection, base time.Time) []comparePoint {
-	offsets := []struct {
-		label string
-		days  int
-	}{
-		{"base", 0},
-		{"week", -7},
-		{"month", -28}, // 4주 전 — 같은 요일 보존
-		{"year", -364}, // 52주 전 — "작년 같은 요일"
-	}
-
-	dates := make([]string, len(offsets))
-	points := make([]comparePoint, len(offsets))
-	for i, off := range offsets {
-		d := base.AddDate(0, 0, off.days).Format("2006-01-02")
-		dates[i] = d
-		points[i] = comparePoint{Label: off.label, Date: d}
-	}
-	index := map[string]int{}
-	for i, d := range dates {
-		index[d] = i
-	}
-
-	// 일별 지표
-	rows, err := conn.Query(
-		"SELECT hm_metricdate, hm_name, hm_qty FROM healthmetric_tb WHERE hm_metricdate IN (?, ?, ?, ?)",
-		dates[0], dates[1], dates[2], dates[3])
-	if err != nil {
-		log.Error().Msg(err.Error())
-	} else {
-		defer rows.Close()
-		for rows.Next() {
-			var day, name string
-			var qty float64
-			if err := rows.Scan(&day, &name, &qty); err != nil {
-				continue
-			}
-			if len(day) > 10 {
-				day = day[:10]
-			}
-			i, ok := index[day]
-			if !ok {
-				continue
-			}
-			v := qty
-			switch name {
-			case "steps":
-				points[i].Steps = &v
-			case "active_energy":
-				points[i].ActiveEnergy = &v
-			case "exercise_minutes":
-				points[i].ExerciseMinutes = &v
-			}
-		}
-	}
-
-	// 운동 세션
-	wrows, err := conn.Query(
-		"SELECT w_workoutdate, COUNT(*), COALESCE(SUM(w_duration),0) FROM workout_tb WHERE w_workoutdate IN (?, ?, ?, ?) GROUP BY w_workoutdate",
-		dates[0], dates[1], dates[2], dates[3])
-	if err != nil {
-		log.Error().Msg(err.Error())
-	} else {
-		defer wrows.Close()
-		for wrows.Next() {
-			var day string
-			var cnt, dur int
-			if err := wrows.Scan(&day, &cnt, &dur); err != nil {
-				continue
-			}
-			if len(day) > 10 {
-				day = day[:10]
-			}
-			if i, ok := index[day]; ok {
-				points[i].WorkoutCount = cnt
-				points[i].WorkoutMinutes = dur / 60
-			}
-		}
-	}
-
-	return points
-}
 
 type monthlyFitness struct {
 	Month    int `json:"month"`

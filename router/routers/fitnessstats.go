@@ -11,14 +11,6 @@ import (
 
 func SetupFitnessRoutes(group fiber.Router) {
 
-	group.Get("/fitness/compare", func(c *fiber.Ctx) error {
-		var controller rest.FitnessController
-		controller.Init(c)
-		controller.Compare(c.Query("date"))
-		controller.Close()
-		return c.JSON(controller.Result)
-	})
-
 	group.Get("/fitness/yearly", func(c *fiber.Ctx) error {
 		var controller rest.FitnessController
 		controller.Init(c)
