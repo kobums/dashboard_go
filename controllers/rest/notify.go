@@ -6,15 +6,11 @@ package rest
 // 수기 작성 파일: buildtool-model 재생성에 덮이지 않는다.
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"dashboard/clients"
 	"dashboard/controllers"
-	"dashboard/global/log"
-	"dashboard/models"
 )
 
 type NotifyController struct {
@@ -101,8 +97,9 @@ func (c *NotifyController) runCheck(mode string) notifyResult {
 	}
 
 	steps := queryMetricByDates(conn, "steps", dates)
-	workoutMin := queryWorkoutMinutes(conn, dates)
+	workoutMin, _ := queryWorkoutMinutes(conn, dates)
 	devCounts := queryDevByDates(dates)
+	readingMin, _ := queryReadingByDates(dates)
 	readingDone := checkReadingDone(dates[0])
 
 	alerts := []notifyAlert{}
@@ -110,18 +107,22 @@ func (c *NotifyController) runCheck(mode string) notifyResult {
 	alerts = append(alerts, buildAlert("workout", "운동", "분", workoutMin, true))
 	alerts = append(alerts, buildAlert("dev", "커밋", "회", devCounts, true))
 
-	// 독서 — 비교 데이터가 없어 단순 규칙: 기준일에 세션 없으면 경고
-	readingAlert := notifyAlert{Area: "reading", Label: "독서", Unit: "", Behind: []notifyCompare{}, Ahead: []notifyCompare{}}
-	if readingDone {
-		readingAlert.Value = 1
-		readingAlert.Message = "독서 완료"
-	} else {
-		readingAlert.Value = 0
-		readingAlert.Behind = append(readingAlert.Behind, notifyCompare{Vs: "오늘", Other: 1, Pct: -100})
-		if mode == "evening" {
-			readingAlert.Message = "독서 — 오늘 아직 안 읽었어요 (연속 독서 끊김 주의)"
+	// 독서 — 하이브리드: 세션 분(分) 비교가 가능하면 걸음처럼 % 비교,
+	// 비교 데이터가 없으면 기존 읽음/안읽음 규칙 (세션 기록이 희박한 현실 대응)
+	readingAlert := buildAlert("reading", "독서", "분", readingMin, true)
+	if readingAlert.Message == "" {
+		readingAlert = notifyAlert{Area: "reading", Label: "독서", Unit: "", Behind: []notifyCompare{}, Ahead: []notifyCompare{}}
+		if readingDone {
+			readingAlert.Value = 1
+			readingAlert.Message = "독서 완료"
 		} else {
-			readingAlert.Message = "독서 — 어제 쉬었어요"
+			readingAlert.Value = 0
+			readingAlert.Behind = append(readingAlert.Behind, notifyCompare{Vs: "오늘", Other: 1, Pct: -100})
+			if mode == "evening" {
+				readingAlert.Message = "독서 — 오늘 아직 안 읽었어요 (연속 독서 끊김 주의)"
+			} else {
+				readingAlert.Message = "독서 — 어제 쉬었어요"
+			}
 		}
 	}
 	alerts = append(alerts, readingAlert)
@@ -259,120 +260,4 @@ func formatNum(v float64) string {
 		out = append(out, ch)
 	}
 	return string(out)
-}
-
-// --- 지표 수집 (반환: [기준일, 전날, 1주 전, 4주 전, 1년 전], -1 = 데이터 없음) ---
-
-func queryMetricByDates(conn *models.Connection, name string, dates []string) []float64 {
-	values := []float64{-1, -1, -1, -1, -1}
-	rows, err := conn.Query(
-		"SELECT hm_metricdate, hm_qty FROM healthmetric_tb WHERE hm_name = ? AND hm_metricdate IN (?, ?, ?, ?, ?)",
-		name, dates[0], dates[1], dates[2], dates[3], dates[4])
-	if err != nil {
-		log.Error().Msg(err.Error())
-		return values
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var day string
-		var qty float64
-		if err := rows.Scan(&day, &qty); err != nil {
-			continue
-		}
-		if len(day) > 10 {
-			day = day[:10]
-		}
-		for i, d := range dates {
-			if d == day {
-				values[i] = qty
-			}
-		}
-	}
-	return values
-}
-
-func queryWorkoutMinutes(conn *models.Connection, dates []string) []float64 {
-	// 운동은 기록 없음 = 0분 (실제 안 한 것)
-	values := []float64{0, 0, 0, 0, 0}
-	rows, err := conn.Query(
-		"SELECT w_workoutdate, COALESCE(SUM(w_duration),0) FROM workout_tb WHERE w_workoutdate IN (?, ?, ?, ?, ?) GROUP BY w_workoutdate",
-		dates[0], dates[1], dates[2], dates[3], dates[4])
-	if err != nil {
-		log.Error().Msg(err.Error())
-		return values
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var day string
-		var dur float64
-		if err := rows.Scan(&day, &dur); err != nil {
-			continue
-		}
-		if len(day) > 10 {
-			day = day[:10]
-		}
-		for i, d := range dates {
-			if d == day {
-				values[i] = dur / 60
-			}
-		}
-	}
-	return values
-}
-
-// queryDevByDates 는 5분 캐시된 dev summary(전체 기간)에서 날짜별 커밋 수를 뽑는다.
-// 캐시 경유라 외부 API 최신성도 함께 확보된다.
-func queryDevByDates(dates []string) []float64 {
-	values := []float64{0, 0, 0, 0, 0}
-	buf, err := clients.GetCached("dev_summary_0", 5*time.Minute, func() ([]byte, error) {
-		return clients.FetchDevSummary(0)
-	})
-	if err != nil {
-		log.Error().Msg(err.Error())
-		values[0] = -1
-		return values
-	}
-	var parsed struct {
-		Calendar []struct {
-			Date  string `json:"date"`
-			Total int    `json:"total"`
-		} `json:"calendar"`
-	}
-	if err := json.Unmarshal(buf, &parsed); err != nil {
-		values[0] = -1
-		return values
-	}
-	for _, day := range parsed.Calendar {
-		for i, d := range dates {
-			if d == day.Date {
-				values[i] = float64(day.Total)
-			}
-		}
-	}
-	return values
-}
-
-// checkReadingDone 은 reading summary 캐시의 streak.lastReadDate 로 기준일 독서 여부를 본다.
-func checkReadingDone(baseDate string) bool {
-	now := time.Now()
-	key := fmt.Sprintf("reading_summary_%v_%v", now.Year(), int(now.Month()))
-	buf, err := clients.GetCached(key, 10*time.Minute, func() ([]byte, error) {
-		return clients.FetchReadingSummary(now.Year(), int(now.Month()))
-	})
-	if err != nil {
-		return false
-	}
-	var parsed struct {
-		Streak struct {
-			LastReadDate string `json:"lastReadDate"`
-		} `json:"streak"`
-	}
-	if err := json.Unmarshal(buf, &parsed); err != nil {
-		return false
-	}
-	last := parsed.Streak.LastReadDate
-	if len(last) > 10 {
-		last = last[:10]
-	}
-	return last >= baseDate
 }
