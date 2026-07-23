@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -97,6 +98,107 @@ func snippetGet(path string) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("snippet GET %v: unauthorized", path)
+}
+
+// FetchReadingDaily 는 전체 독서 세션을 일별로 집계한다: [{date, minutes, pages, sessions}]
+func FetchReadingDaily() ([]byte, error) {
+	buf, err := snippetGet("/readingsessions")
+	if err != nil {
+		return nil, err
+	}
+
+	var sessions []struct {
+		DurationSeconds int    `json:"durationSeconds"`
+		PagesRead       int    `json:"pagesRead"`
+		SessionDate     string `json:"sessionDate"`
+	}
+	if err := json.Unmarshal(buf, &sessions); err != nil {
+		return nil, err
+	}
+
+	type dailyAgg struct {
+		Minutes  int `json:"minutes"`
+		Pages    int `json:"pages"`
+		Sessions int `json:"sessions"`
+	}
+	byDay := map[string]*dailyAgg{}
+	for _, s := range sessions {
+		if len(s.SessionDate) < 10 {
+			continue
+		}
+		day := s.SessionDate[:10]
+		if _, ok := byDay[day]; !ok {
+			byDay[day] = &dailyAgg{}
+		}
+		byDay[day].Minutes += s.DurationSeconds / 60
+		byDay[day].Pages += s.PagesRead
+		byDay[day].Sessions++
+	}
+
+	type dailyRow struct {
+		Date     string `json:"date"`
+		Minutes  int    `json:"minutes"`
+		Pages    int    `json:"pages"`
+		Sessions int    `json:"sessions"`
+	}
+	days := make([]string, 0, len(byDay))
+	for d := range byDay {
+		days = append(days, d)
+	}
+	sort.Strings(days)
+	rows := make([]dailyRow, 0, len(days))
+	for _, d := range days {
+		agg := byDay[d]
+		rows = append(rows, dailyRow{Date: d, Minutes: agg.Minutes, Pages: agg.Pages, Sessions: agg.Sessions})
+	}
+	return json.Marshal(rows)
+}
+
+// FetchReadingBooks 는 완독한 책 목록을 만든다 (연도 필터는 프론트에서).
+// 완독 판정: status 가 done/completed 이거나 endDate 가 있는 것 (snippet 에 두 값이 혼재).
+func FetchReadingBooks() ([]byte, error) {
+	buf, err := snippetGet("/userbooks")
+	if err != nil {
+		return nil, err
+	}
+
+	var books []struct {
+		Title    string `json:"title"`
+		Author   string `json:"author"`
+		CoverUrl string `json:"coverUrl"`
+		Status   string `json:"status"`
+		Rating   *int   `json:"rating"`
+		EndDate  string `json:"endDate"`
+	}
+	if err := json.Unmarshal(buf, &books); err != nil {
+		return nil, err
+	}
+
+	type doneBook struct {
+		Title    string `json:"title"`
+		Author   string `json:"author"`
+		CoverUrl string `json:"coverUrl"`
+		Rating   int    `json:"rating"`
+		EndDate  string `json:"endDate"`
+	}
+	done := []doneBook{}
+	for _, b := range books {
+		if b.Status != "done" && b.Status != "completed" && b.EndDate == "" {
+			continue
+		}
+		rating := 0
+		if b.Rating != nil {
+			rating = *b.Rating
+		}
+		endDate := b.EndDate
+		if len(endDate) > 10 {
+			endDate = endDate[:10]
+		}
+		done = append(done, doneBook{Title: b.Title, Author: b.Author, CoverUrl: b.CoverUrl, Rating: rating, EndDate: endDate})
+	}
+	// 최근 완독 순
+	sort.Slice(done, func(i, j int) bool { return done[i].EndDate > done[j].EndDate })
+	return json.Marshal(done)
 }
 
 // FetchReadingSummary 는 snippet 통계 API 들을 모아 대시보드용 요약 JSON 을 만든다.

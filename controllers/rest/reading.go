@@ -36,3 +36,23 @@ func (c *ReadingController) Summary(year int, month int) {
 
 	c.Set("item", json.RawMessage(buf))
 }
+
+// Daily — 전체 기간 일별 독서 집계 (분·페이지·세션 수)
+func (c *ReadingController) Daily() {
+	buf, err := clients.GetCached("reading_daily", 10*time.Minute, clients.FetchReadingDaily)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.Set("items", json.RawMessage(buf))
+}
+
+// Books — 완독한 책 목록 (최근 완독 순, 연도 필터는 프론트)
+func (c *ReadingController) Books() {
+	buf, err := clients.GetCached("reading_books", 10*time.Minute, clients.FetchReadingBooks)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.Set("items", json.RawMessage(buf))
+}

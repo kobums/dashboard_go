@@ -22,4 +22,20 @@ func SetupReadingRoutes(group fiber.Router) {
 		return c.JSON(controller.Result)
 	})
 
+	group.Get("/reading/daily", func(c *fiber.Ctx) error {
+		var controller rest.ReadingController
+		controller.Init(c)
+		controller.Daily()
+		controller.Close()
+		return c.JSON(controller.Result)
+	})
+
+	group.Get("/reading/books", func(c *fiber.Ctx) error {
+		var controller rest.ReadingController
+		controller.Init(c)
+		controller.Books()
+		controller.Close()
+		return c.JSON(controller.Result)
+	})
+
 }
