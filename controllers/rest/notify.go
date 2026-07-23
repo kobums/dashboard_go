@@ -114,14 +114,14 @@ func (c *NotifyController) runCheck(mode string) notifyResult {
 	readingAlert := notifyAlert{Area: "reading", Label: "독서", Unit: "", Behind: []notifyCompare{}, Ahead: []notifyCompare{}}
 	if readingDone {
 		readingAlert.Value = 1
-		readingAlert.Message = "독서 ✓ 완료"
+		readingAlert.Message = "독서 완료"
 	} else {
 		readingAlert.Value = 0
 		readingAlert.Behind = append(readingAlert.Behind, notifyCompare{Vs: "오늘", Other: 1, Pct: -100})
 		if mode == "evening" {
-			readingAlert.Message = "오늘 아직 책을 안 읽었어요 — 연속 독서가 끊겨요"
+			readingAlert.Message = "독서 — 오늘 아직 안 읽었어요 (연속 독서 끊김 주의)"
 		} else {
-			readingAlert.Message = "어제 독서를 쉬었어요"
+			readingAlert.Message = "독서 — 어제 쉬었어요"
 		}
 	}
 	alerts = append(alerts, readingAlert)
@@ -152,7 +152,7 @@ func (c *NotifyController) runCheck(mode string) notifyResult {
 		WeekdayLabel: weekdayKo[int(base.Weekday())],
 		Notify:       notify,
 		Alerts:       valid,
-		Summary:      buildSummary(mode, valid, behindCount),
+		Summary:      buildSummary(mode, valid, behindCount, weekdayKo[int(base.Weekday())]),
 	}
 }
 
@@ -189,50 +189,47 @@ func buildAlert(area, label, unit string, values []float64, zeroValid bool) noti
 			alert.Message += fmt.Sprintf(" (외 %d개 시점 대비 부족)", len(alert.Behind)-1)
 		}
 	} else if len(alert.Ahead) > 0 {
-		alert.Message = fmt.Sprintf("%s %s%s ✓ 모든 비교 시점보다 많아요", label, formatNum(base), unit)
+		first := alert.Ahead[0]
+		alert.Message = fmt.Sprintf("%s %s%s — %s(%s%s)보다 %d%% 많아요",
+			label, formatNum(base), unit, first.Vs, formatNum(first.Other), unit, first.Pct)
 	}
 
 	return alert
 }
 
-func buildSummary(mode string, alerts []notifyAlert, behindCount int) string {
-	var behind, ahead []string
-	for _, a := range alerts {
-		if len(a.Behind) > 0 {
-			behind = append(behind, a.Label)
-		} else if a.Message != "" {
-			ahead = append(ahead, a.Label)
-		}
-	}
-
+// buildSummary 는 알림 본문(멀티라인)을 만든다 — 항목별 한 줄씩, 수치 포함.
+// iOS 알림은 여러 줄을 잘 보여준다 (배너에선 요약, 잠금화면·알림센터에서 전체).
+func buildSummary(mode string, alerts []notifyAlert, behindCount int, weekdayLabel string) string {
 	if mode == "evening" {
 		if behindCount == 0 {
 			return "오늘은 모든 지표가 이전 기록을 넘었어요 💪"
 		}
-		joined := strings.Join(behind, "·")
-		msg := joined + subjectParticle(joined) + " 이전 기록보다 부족해요."
-		// 첫 부족 지표의 상세를 붙인다
+		lines := []string{"오늘 채울 것 (" + weekdayLabel + ")"}
 		for _, a := range alerts {
-			if len(a.Behind) > 0 {
-				msg += " " + a.Message + "."
-				break
+			if len(a.Behind) > 0 && a.Message != "" {
+				lines = append(lines, "▼ "+a.Message)
 			}
 		}
-		return msg + " 남은 시간에 채워보세요!"
+		lines = append(lines, "남은 시간에 채워보세요!")
+		return strings.Join(lines, "\n")
 	}
 
-	// morning: 어제 결과 보고
-	parts := []string{}
-	if len(ahead) > 0 {
-		parts = append(parts, "✓ "+strings.Join(ahead, "·"))
+	// morning: 어제 결과 보고 — 전 항목 수치 포함
+	lines := []string{}
+	for _, a := range alerts {
+		if a.Message == "" {
+			continue
+		}
+		prefix := "✓ "
+		if len(a.Behind) > 0 {
+			prefix = "▼ "
+		}
+		lines = append(lines, prefix+a.Message)
 	}
-	if len(behind) > 0 {
-		parts = append(parts, "▼ "+strings.Join(behind, "·"))
-	}
-	if len(parts) == 0 {
+	if len(lines) == 0 {
 		return "어제는 판정할 데이터가 없었어요"
 	}
-	return "어제 결과: " + strings.Join(parts, " / ")
+	return "어제(" + weekdayLabel + ") 결과\n" + strings.Join(lines, "\n")
 }
 
 // subjectParticle 은 마지막 글자의 받침 유무로 이/가 를 고른다.
