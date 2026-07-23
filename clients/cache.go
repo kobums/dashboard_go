@@ -1,6 +1,7 @@
 package clients
 
-// fetchcache_tb 기반 stale-while-revalidate 캐시.
+// fetchcache_tb 기반 stale-while-revalidate 캐시 + 인메모리 앞단.
+// - 메모리에 TTL 안 항목이 있으면 DB 왕복 없이 즉시 반환 (원격 DB 연결이 ~1.5초라 필수)
 // - TTL 안이면 캐시 그대로 반환
 // - TTL 지났지만 캐시가 있으면 캐시를 즉시 반환하고 백그라운드에서 갱신 (single-flight)
 // - 캐시가 아예 없으면 동기로 fetch
@@ -17,7 +18,21 @@ const cacheTimeFormat = "2006-01-02 15:04:05"
 
 var refreshing sync.Map // key → true (갱신 goroutine 중복 방지)
 
+type memEntry struct {
+	payload   []byte
+	fetchedAt time.Time
+}
+
+var memCache sync.Map // key → memEntry (프로세스 단일 인스턴스 전제)
+
 func GetCached(key string, ttl time.Duration, fetch func() ([]byte, error)) ([]byte, error) {
+	if v, ok := memCache.Load(key); ok {
+		entry := v.(memEntry)
+		if time.Since(entry.fetchedAt) < ttl {
+			return entry.payload, nil
+		}
+	}
+
 	conn := models.NewConnection()
 	defer conn.Close()
 
@@ -27,6 +42,7 @@ func GetCached(key string, ttl time.Duration, fetch func() ([]byte, error)) ([]b
 	if item != nil {
 		fetchedAt, err := time.ParseInLocation(cacheTimeFormat, item.Fetchedat, time.Local)
 		if err == nil && time.Since(fetchedAt) < ttl {
+			memCache.Store(key, memEntry{payload: []byte(item.Payload), fetchedAt: fetchedAt})
 			return []byte(item.Payload), nil
 		}
 
@@ -59,6 +75,8 @@ func refreshCache(key string, fetch func() ([]byte, error)) {
 }
 
 func saveCache(key string, payload []byte) {
+	memCache.Store(key, memEntry{payload: payload, fetchedAt: time.Now()})
+
 	conn := models.NewConnection()
 	defer conn.Close()
 
