@@ -25,5 +25,6 @@ func SetRouter(r *fiber.App) {
 	routers.SetupFitnessRoutes(apiGroup)
 	routers.SetupCompareRoutes(apiGroup)
 	routers.SetupDevRoutes(apiGroup)
+	routers.SetupPushRoutes(apiGroup)
 	routers.SetupUploadRoutes(apiGroup)
 }

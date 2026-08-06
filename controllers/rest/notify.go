@@ -18,7 +18,7 @@ type NotifyController struct {
 }
 
 type notifyCompare struct {
-	Vs    string  `json:"vs"` // 전날 | 1주 전 | 4주 전 | 1년 전
+	Vs    string  `json:"vs"` // 1주 전 | 전날 | 4주 전 | 1년 전
 	Other float64 `json:"other"`
 	Pct   int     `json:"pct"` // 기준일이 비교일 대비 몇 % 인지 (음수 = 부족)
 }
@@ -33,12 +33,14 @@ type notifyAlert struct {
 	Message string          `json:"message"`
 }
 
+// 1주 전(같은 요일)이 첫 순위 — 요일 패턴(평일/주말 차) 영향 없는 공정한 비교라
+// 알림 문장도 이걸 우선 사용하고, 데이터 없으면 전날로 자연 폴백된다.
 var compareOffsets = []struct {
 	label string
 	days  int
 }{
-	{"전날", -1},
 	{"1주 전", -7},
+	{"전날", -1},
 	{"4주 전", -28},
 	{"1년 전", -364},
 }
@@ -71,6 +73,25 @@ func (c *NotifyController) CheckText(mode string) string {
 		return ""
 	}
 	return result.Summary
+}
+
+// RunNotifyCheck 는 스케줄러(서버 내 goroutine)용 헤드리스 판정 — HTTP 컨텍스트 없이 동작.
+// 반환: 푸시 제목(요약 첫 줄), 본문(나머지 줄), 발송 필요 여부.
+func RunNotifyCheck(mode string) (title string, body string, notify bool) {
+	var c NotifyController
+	c.Init(nil)
+	defer c.Close()
+
+	result := c.runCheck(mode)
+	if !result.Notify || result.Summary == "" {
+		return "", "", false
+	}
+	lines := strings.SplitN(result.Summary, "\n", 2)
+	title = lines[0]
+	if len(lines) > 1 {
+		body = lines[1]
+	}
+	return title, body, true
 }
 
 func (c *NotifyController) runCheck(mode string) notifyResult {

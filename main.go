@@ -28,5 +28,6 @@ func main() {
 
 	setting.GetInstance()
 
+	services.StartNotifyScheduler()
 	services.Http()
 }
