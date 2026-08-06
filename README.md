@@ -11,12 +11,13 @@
 ## 디렉토리
 
 ```
-main.go               진입점 (config → cache → HTTP)
+main.go               진입점 (config → cache → 알림 스케줄러 → HTTP)
 services/http.go      Fiber 셋업 · SPA 정적 서빙 + index.html 폴백
+services/scheduler.go 알림 스케줄러 — 아침 9시/저녁 8시 판정 후 ntfy·웹푸시 발송 (채널 미설정이면 비활성)
 router/router.go      라우트 등록 (인증 구간 구분)
-router/routers/       라우터 — *생성*: workout 등 CRUD / *수기*: reading, health, dev, fitnessstats, compare, notify, auth_middleware
-controllers/rest/     컨트롤러 — *생성*: CRUD / *수기*: reading, healthingest, dev, fitnessstats, compare, metrics(공용 수집기), notify
-clients/              외부 연동 (수기): snippet, github, gitlab, dev(집계), cache(SWR), backfill
+router/routers/       라우터 — *생성*: workout 등 CRUD / *수기*: reading, health, dev, fitnessstats, compare, notify, push, auth_middleware
+controllers/rest/     컨트롤러 — *생성*: CRUD / *수기*: reading, healthingest, dev, fitnessstats, compare, metrics(공용 수집기), notify, push
+clients/              외부 연동 (수기): snippet, github, gitlab, dev(집계), cache(SWR), backfill, ntfy(발송), webpush(발송+구독 저장)
 models/               *생성* Manager + db.go(쿼리 빌더)
 global/config/        .env.yml 파싱 + 환경변수 오버라이드
 cmd/backfill/         개발 컨트리뷰션 과거 전체 백필 (일회성 CLI)
@@ -52,6 +53,14 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | GET | `/api/dev/yearly` | 연도별 컨트리뷰션 (devstat_tb 로컬 집계, 외부 API 안 씀) |
 | GET | `/api/notify/check?mode=` | **알림 판정** — 걸음·운동·커밋·독서(분, 세션 없으면 당일 읽음 여부 폴백)를 전날/전주(같은 요일)/4주 전/1년 전과 비교. `evening`=오늘 경고(부족 시만 notify), `morning`=어제 보고(항상), `auto`=시각 기준. 인증: Bearer **또는** api-key |
 | GET | `/api/notify/text?mode=` | 〃 의 **iOS 단축어용 텍스트판** — 알림 불필요면 빈 응답, 필요하면 알림 문장만(plain text). 단축어는 "가져오기→값 있으면→알림 표시" 3액션 |
+| GET | `/api/push/status` | 웹푸시 상태 — VAPID 공개키, 채널 구성 여부, 구독 수 |
+| POST | `/api/push/subscribe` | 브라우저 PushSubscription 저장 (endpoint 기준 중복 갱신) — `fetchcache_tb` 의 `push_subscriptions` 키에 JSON 배열로 보관 |
+| POST | `/api/push/unsubscribe` | `{endpoint}` 로 구독 제거 |
+| POST | `/api/push/test` | 구성된 모든 채널(웹푸시+ntfy)로 시험 알림 발송 |
+
+**알림 발송(푸시)**: `services/scheduler.go` 가 아침 9시(어제 보고)/저녁 8시(부족 경고)에 notify 판정을 돌려
+ntfy(`clients/ntfy.go`, JSON publish — 한글 헤더 문제 없음)와 웹푸시(`clients/webpush.go`, VAPID)로 보낸다.
+만료된 웹푸시 구독(404/410)은 발송 시 자동 제거. 조회형 `/api/notify/*` (홈 배너·iOS 단축어)는 그대로 유지된다.
 
 ## DB (dashboard @ 공용 MariaDB)
 
@@ -67,6 +76,10 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 로컬: `.env.yml` (gitignore). 운영: 이미지의 `.env.yml.docker`(시크릿 없음) + 서버 `/data/dashboard/.env` 환경변수 오버라이드 — 키 목록은 `.env.production.example`.
 
 핵심 키: `DASH_TOKEN`, `HEALTH_INGEST_TOKEN`, `GITHUB_TOKEN`(read:user), `GITLAB_TOKEN`(read_api), `GITLAB_USERNAME`, `SNIPPET_EMAIL/PASSWORD`, `DB_*`
+
+알림 푸시 키(둘 다 없으면 스케줄러 비활성):
+- `NTFY_TOPIC` — 공개 ntfy.sh 는 토픽 이름이 곧 비밀번호, 추측 불가능하게. `NTFY_SERVER`(기본 https://ntfy.sh)
+- `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` — 웹푸시. 생성: `webpush.GenerateVAPIDKeys()` (SherClockHolmes/webpush-go)
 
 ## 개발 · 배포
 
