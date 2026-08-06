@@ -53,6 +53,10 @@ type _Dash struct {
 	SnippetEmail      string `yaml:"snippetEmail"`
 	SnippetPassword   string `yaml:"snippetPassword"`
 	SnippetApiUrl     string `yaml:"snippetApiUrl"`
+	NtfyServer        string `yaml:"ntfyServer"`      // ntfy 서버 (기본 https://ntfy.sh)
+	NtfyTopic         string `yaml:"ntfyTopic"`       // 비우면 ntfy 발송 안 함
+	VapidPublicKey    string `yaml:"vapidPublicKey"`  // 웹푸시 VAPID 공개키
+	VapidPrivateKey   string `yaml:"vapidPrivateKey"` // 비우면 웹푸시 발송 안 함
 }
 
 type _Database struct {
@@ -125,6 +129,10 @@ var GitlabUsername string
 var SnippetEmail string
 var SnippetPassword string
 var SnippetApiUrl string
+var NtfyServer string
+var NtfyTopic string
+var VapidPublicKey string
+var VapidPrivateKey string
 var Version string
 var Mode string
 var Port string
@@ -422,6 +430,21 @@ func Init() {
 	if v := os.Getenv("SNIPPET_API_URL"); v != "" {
 		SnippetApiUrl = v
 	}
+	if v := os.Getenv("NTFY_SERVER"); v != "" {
+		NtfyServer = v
+	}
+	if v := os.Getenv("NTFY_TOPIC"); v != "" {
+		NtfyTopic = v
+	}
+	if v := os.Getenv("VAPID_PUBLIC_KEY"); v != "" {
+		VapidPublicKey = v
+	}
+	if v := os.Getenv("VAPID_PRIVATE_KEY"); v != "" {
+		VapidPrivateKey = v
+	}
+	if NtfyServer == "" {
+		NtfyServer = "https://ntfy.sh"
+	}
 	if GithubUsername == "" {
 		GithubUsername = "kobums"
 	}
@@ -443,6 +466,10 @@ func setDash(d _Dash) {
 	SnippetEmail = d.SnippetEmail
 	SnippetPassword = d.SnippetPassword
 	SnippetApiUrl = d.SnippetApiUrl
+	NtfyServer = d.NtfyServer
+	NtfyTopic = d.NtfyTopic
+	VapidPublicKey = d.VapidPublicKey
+	VapidPrivateKey = d.VapidPrivateKey
 }
 
 // AppleConfigured reports whether enough Apple credentials are present to

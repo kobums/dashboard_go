@@ -18,14 +18,17 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/SherClockHolmes/webpush-go v1.4.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.70.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/image v0.39.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 )
