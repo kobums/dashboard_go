@@ -1,6 +1,6 @@
 package services
 
-// 노션 운동 기록 동기화 스케줄러 — 기동 직후 1회 + 이후 3시간마다 전체 재동기화.
+// 노션 운동 기록·식단 일지 동기화 스케줄러 — 기동 직후 1회 + 이후 3시간마다 전체 재동기화.
 // 헬스장에서 기록한 직후 바로 보고 싶으면 웨이트 화면의 「지금 동기화」(POST /api/lift/sync).
 
 import (
@@ -36,4 +36,7 @@ func runLiftSync() {
 		}
 	}()
 	clients.SyncLift() // 오류는 SyncLift 안에서 로그 + 상태에 남긴다
+	if err := clients.SyncDiet(); err != nil {
+		log.Error().Str("service", "diet-sync").Msg(err.Error())
+	}
 }

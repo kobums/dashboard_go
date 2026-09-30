@@ -117,3 +117,25 @@ CREATE TABLE IF NOT EXISTS dashboard.liftset_tb (
   KEY idx_liftset_exercise (ls_exercisenotionid),
   KEY idx_liftset_date (ls_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── 노션 식단 일지 복제본 ────────────────────────────────────────────────
+-- 원본은 노션 「식단 일지」 DB(음식 1개 = 1행). clients/dietsync.go 가 lift 와 같은 주기로 전체 교체.
+-- buildtool-model 대상 아님 — 수기 SQL(clients/dietsync.go, controllers/rest/diet.go)로만 다룬다.
+CREATE TABLE IF NOT EXISTS dashboard.diet_tb (
+  dt_id         BIGINT NOT NULL AUTO_INCREMENT,
+  dt_notionid   VARCHAR(40)  NOT NULL,
+  dt_date       DATE         NOT NULL,
+  dt_meal       VARCHAR(10)  NOT NULL DEFAULT '',   -- 아침/점심/운동 전/저녁/간식
+  dt_food       VARCHAR(200) NOT NULL DEFAULT '',
+  dt_grams      DOUBLE       NOT NULL DEFAULT 0,
+  dt_kcal       DOUBLE       NOT NULL DEFAULT 0,
+  dt_protein    DOUBLE       NOT NULL DEFAULT 0,
+  dt_carbs      DOUBLE       NOT NULL DEFAULT 0,
+  dt_fat        DOUBLE       NOT NULL DEFAULT 0,
+  dt_foodcode   VARCHAR(40)  NOT NULL DEFAULT '',   -- 식약처 식품코드
+  dt_memo       TEXT         NOT NULL DEFAULT '',
+  dt_createddate DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (dt_id),
+  UNIQUE KEY uk_diet_notion (dt_notionid),
+  KEY idx_diet_date (dt_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

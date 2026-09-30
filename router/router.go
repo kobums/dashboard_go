@@ -24,6 +24,7 @@ func SetRouter(r *fiber.App) {
 	routers.SetupWorkoutRoutes(apiGroup)
 	routers.SetupFitnessRoutes(apiGroup)
 	routers.SetupLiftRoutes(apiGroup)
+	routers.SetupDietRoutes(apiGroup)
 	routers.SetupCompareRoutes(apiGroup)
 	routers.SetupDevRoutes(apiGroup)
 	routers.SetupPushRoutes(apiGroup)

@@ -53,6 +53,11 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | POST | `/api/lift/log` | 종목 1개 저장 → **노션에 생성/수정**(`id` 있으면 수정) + 그날 캘린더 페이지 찾기/생성·부위/요약/유산소 재계산 + 동기화. 세트 텍스트는 파서로 검증 |
 | POST | `/api/lift/log/delete` | `{id}` 노션 휴지통으로 (마지막 행이면 그날 캘린더 페이지도) + 동기화 |
 | POST | `/api/lift/day` | `{date, condition}` 그날 캘린더 컨디션 |
+| GET | `/api/diet/day?date=` | 그날 식단 — 운동일/휴식일 판정·목표·합계·끼니별 항목·자주 먹은 음식(60일) |
+| GET | `/api/diet/summary?days=` | 일별 섭취·추정 소모(BMR+활동+10%)·적자·체중 + 주간(월요일 시작) 평균·단백질 달성일·체중 변화 |
+| GET | `/api/diet/search?q=` | 식약처 식품영양성분DB 검색(1일 메모리 캐시, `FOOD_API_KEY`) — 기준량당 kcal/단백질/탄수/지방 |
+| POST | `/api/diet/log` · `/diet/log/delete` · `/diet/copy` | 음식 저장·삭제(노션 휴지통)·다른 날(끼니) 복사 → 노션 먼저 쓰고 동기화 |
+| GET/POST | `/api/diet/targets` | 운동일/휴식일 목표 매크로 + BMR (`fetchcache_tb` diet_targets) |
 | GET | `/api/reading/summary?year=&month=` | snippetapi 프록시 집계 (10분 캐시) |
 | GET | `/api/reading/daily` | 독서 세션 일별 집계 `[{date, minutes, pages, sessions}]` (10분 캐시) — 잔디·일별/주별 차트용 |
 | GET | `/api/reading/books` | 완독 책 목록 `[{title, author, coverUrl, rating, endDate}]` (10분 캐시) — 연도별 표지 그리드용 |
@@ -83,6 +88,7 @@ ntfy(`clients/ntfy.go`, JSON publish — 한글 헤더 문제 없음)와 웹푸�
 | `healthmetric_tb` (hm_*) | 일별 건강 지표 (steps/weight/...) | UNIQUE(metricdate, name) upsert |
 | `devstat_tb` (ds_*) | 소스·일별 컨트리뷰션 (백필 포함 2019~) | UNIQUE(source, statdate) upsert |
 | `liftday_tb` (ld_*) / `liftexercise_tb` (le_*) / `liftset_tb` (ls_*) | 노션 운동 캘린더(하루)·운동 일지(종목)·파싱된 세트 **복제본** — buildtool-model 대상 아님, 직접 수정 금지 | 동기화마다 전체 교체 |
+| `diet_tb` (dt_*) | 노션 「식단 일지」 복제본 — buildtool-model 대상 아님 | 동기화마다 전체 교체 |
 | `fetchcache_tb` (fc_*) | 외부 API 응답 캐시 (SWR) — 앞단에 프로세스 인메모리 캐시가 있어 TTL 안 반복 조회는 DB 왕복 없음 | UNIQUE(cachekey) |
 
 ## 설정
@@ -93,6 +99,7 @@ ntfy(`clients/ntfy.go`, JSON publish — 한글 헤더 문제 없음)와 웹푸�
 
 알림 푸시 키(둘 다 없으면 스케줄러 비활성):
 - `NOTION_TOKEN` — 노션 내부 integration 시크릿 (「운동 계획 — 4분할」 페이지에 연결 필요). 비우면 웨이트 동기화 비활성. `NOTION_LOG_DS`/`NOTION_DAY_DS` 로 data source id 변경 가능(기본값 내장)
+- `FOOD_API_KEY` — 공공데이터포털 「식품의약품안전처_식품영양성분DB정보」 일반 인증키(Decoding). 비우면 식단 음식 검색만 비활성(자주 먹은 음식·직접 입력은 동작). `NOTION_DIET_DS` 로 식단 data source 변경 가능. `FOOD_API_URL` — 요청주소(기본 `…/FoodNtrCpntDbInfo03/getFoodNtrCpntDbInq03`), 서비스 버전이 바뀌면 활용신청 상세의 요청주소로
 - `NTFY_TOPIC` — 공개 ntfy.sh 는 토픽 이름이 곧 비밀번호, 추측 불가능하게. `NTFY_SERVER`(기본 https://ntfy.sh)
 - `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` — 웹푸시. 생성: `webpush.GenerateVAPIDKeys()` (SherClockHolmes/webpush-go)
 
