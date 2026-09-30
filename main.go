@@ -29,5 +29,6 @@ func main() {
 	setting.GetInstance()
 
 	services.StartNotifyScheduler()
+	services.StartLiftSync()
 	services.Http()
 }

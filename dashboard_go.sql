@@ -55,3 +55,65 @@ CREATE TABLE IF NOT EXISTS dashboard.fetchcache_tb (
   PRIMARY KEY (fc_id),
   UNIQUE KEY uk_cachekey (fc_cachekey)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── 노션 운동 기록 복제본 (웨이트) ─────────────────────────────────────────
+-- 원본은 노션 「운동 캘린더」「운동 일지」 DB. services/liftsync.go 가 주기적으로 전체 재동기화
+-- (트랜잭션 안에서 DELETE → INSERT) 하므로 이 테이블들은 직접 수정하지 않는다.
+-- buildtool-model 대상 아님 — 생성 CRUD 없이 수기 SQL(clients/liftsync.go, controllers/rest/lift.go)로만 다룬다.
+
+-- 운동 캘린더: 하루 1행
+CREATE TABLE IF NOT EXISTS dashboard.liftday_tb (
+  ld_id         BIGINT NOT NULL AUTO_INCREMENT,
+  ld_notionid   VARCHAR(40)  NOT NULL,
+  ld_date       DATE         NOT NULL,
+  ld_title      VARCHAR(200) NOT NULL DEFAULT '',
+  ld_parts      VARCHAR(200) NOT NULL DEFAULT '',   -- 부위 multi-select, 콤마 구분
+  ld_summary    TEXT         NOT NULL DEFAULT '',
+  ld_cardio     VARCHAR(500) NOT NULL DEFAULT '',
+  ld_condition  VARCHAR(10)  NOT NULL DEFAULT '',   -- 좋음/보통/나쁨
+  ld_createddate DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (ld_id),
+  UNIQUE KEY uk_liftday_notion (ld_notionid),
+  KEY idx_liftday_date (ld_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 운동 일지: 종목 1개 = 1행 (웜업/본세트/목표 원문 보존 — 세트는 liftset_tb 로 파싱)
+CREATE TABLE IF NOT EXISTS dashboard.liftexercise_tb (
+  le_id         BIGINT NOT NULL AUTO_INCREMENT,
+  le_notionid   VARCHAR(40)  NOT NULL,
+  le_daynotionid VARCHAR(40) NOT NULL DEFAULT '',   -- 운동일 relation (liftday_tb.ld_notionid)
+  le_date       DATE         NOT NULL,
+  le_name       VARCHAR(100) NOT NULL,              -- 종목 select (비면 제목)
+  le_part       VARCHAR(20)  NOT NULL DEFAULT '',   -- 가슴/등/어깨·팔/하체/유산소
+  le_warmup     VARCHAR(500) NOT NULL DEFAULT '',
+  le_mainset    VARCHAR(500) NOT NULL DEFAULT '',
+  le_target     VARCHAR(200) NOT NULL DEFAULT '',   -- 다음 회차 목표
+  le_minutes    DOUBLE       NOT NULL DEFAULT 0,    -- 유산소
+  le_speed      DOUBLE       NOT NULL DEFAULT 0,
+  le_incline    DOUBLE       NOT NULL DEFAULT 0,
+  le_distance   DOUBLE       NOT NULL DEFAULT 0,
+  le_condition  VARCHAR(10)  NOT NULL DEFAULT '',
+  le_memo       TEXT         NOT NULL DEFAULT '',
+  le_parseerror VARCHAR(300) NOT NULL DEFAULT '',   -- 웜업/본세트/목표 형식 오류 (화면에 노출)
+  le_createddate DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (le_id),
+  UNIQUE KEY uk_liftexercise_notion (le_notionid),
+  KEY idx_liftexercise_date (le_date),
+  KEY idx_liftexercise_name (le_name, le_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 파싱된 세트: 세트 1개 = 1행
+CREATE TABLE IF NOT EXISTS dashboard.liftset_tb (
+  ls_id         BIGINT NOT NULL AUTO_INCREMENT,
+  ls_exercisenotionid VARCHAR(40) NOT NULL,          -- liftexercise_tb.le_notionid
+  ls_date       DATE         NOT NULL,
+  ls_order      INT          NOT NULL DEFAULT 0,
+  ls_warmup     TINYINT      NOT NULL DEFAULT 0,
+  ls_bodyweight TINYINT      NOT NULL DEFAULT 0,     -- BW(맨몸) — 무게 대신 횟수로 비교
+  ls_weight     DOUBLE       NOT NULL DEFAULT 0,     -- kg
+  ls_reps       INT          NOT NULL DEFAULT 0,
+  ls_createddate DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (ls_id),
+  KEY idx_liftset_exercise (ls_exercisenotionid),
+  KEY idx_liftset_date (ls_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

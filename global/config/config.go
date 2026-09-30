@@ -57,6 +57,9 @@ type _Dash struct {
 	NtfyTopic         string `yaml:"ntfyTopic"`       // 비우면 ntfy 발송 안 함
 	VapidPublicKey    string `yaml:"vapidPublicKey"`  // 웹푸시 VAPID 공개키
 	VapidPrivateKey   string `yaml:"vapidPrivateKey"` // 비우면 웹푸시 발송 안 함
+	NotionToken       string `yaml:"notionToken"`     // 노션 운동 기록 동기화 (비우면 동기화 안 함)
+	NotionLogDS       string `yaml:"notionLogDs"`     // 「운동 일지」 data source id
+	NotionDayDS       string `yaml:"notionDayDs"`     // 「운동 캘린더」 data source id
 }
 
 type _Database struct {
@@ -133,6 +136,9 @@ var NtfyServer string
 var NtfyTopic string
 var VapidPublicKey string
 var VapidPrivateKey string
+var NotionToken string
+var NotionLogDS string
+var NotionDayDS string
 var Version string
 var Mode string
 var Port string
@@ -442,6 +448,21 @@ func Init() {
 	if v := os.Getenv("VAPID_PRIVATE_KEY"); v != "" {
 		VapidPrivateKey = v
 	}
+	if v := os.Getenv("NOTION_TOKEN"); v != "" {
+		NotionToken = v
+	}
+	if v := os.Getenv("NOTION_LOG_DS"); v != "" {
+		NotionLogDS = v
+	}
+	if v := os.Getenv("NOTION_DAY_DS"); v != "" {
+		NotionDayDS = v
+	}
+	if NotionLogDS == "" {
+		NotionLogDS = "2076c920-5f8e-4f06-995f-9ecc290ea619"
+	}
+	if NotionDayDS == "" {
+		NotionDayDS = "0796b547-251e-4d40-ad9c-61394ec880b9"
+	}
 	if NtfyServer == "" {
 		NtfyServer = "https://ntfy.sh"
 	}
@@ -470,6 +491,9 @@ func setDash(d _Dash) {
 	NtfyTopic = d.NtfyTopic
 	VapidPublicKey = d.VapidPublicKey
 	VapidPrivateKey = d.VapidPrivateKey
+	NotionToken = d.NotionToken
+	NotionLogDS = d.NotionLogDS
+	NotionDayDS = d.NotionDayDS
 }
 
 // AppleConfigured reports whether enough Apple credentials are present to
