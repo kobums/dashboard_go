@@ -61,6 +61,7 @@ type _Dash struct {
 	NotionLogDS       string `yaml:"notionLogDs"`     // 「운동 일지」 data source id
 	NotionDayDS       string `yaml:"notionDayDs"`     // 「운동 캘린더」 data source id
 	NotionDietDS      string `yaml:"notionDietDs"`    // 「식단 일지」 data source id
+	NotionDietDayDS   string `yaml:"notionDietDayDs"` // 「식단 기록」(하루 1페이지) data source id
 	FoodApiKey        string `yaml:"foodApiKey"`      // 공공데이터포털 식약처 식품영양성분DB 서비스키 (비우면 음식 검색 비활성)
 	FoodApiURL        string `yaml:"foodApiUrl"`      // 식품영양성분DB 요청주소 (비우면 기본 v03)
 }
@@ -143,6 +144,7 @@ var NotionToken string
 var NotionLogDS string
 var NotionDayDS string
 var NotionDietDS string
+var NotionDietDayDS string
 var FoodApiKey string
 var FoodApiURL string
 var Version string
@@ -466,6 +468,9 @@ func Init() {
 	if v := os.Getenv("NOTION_DIET_DS"); v != "" {
 		NotionDietDS = v
 	}
+	if v := os.Getenv("NOTION_DIET_DAY_DS"); v != "" {
+		NotionDietDayDS = v
+	}
 	if v := os.Getenv("FOOD_API_KEY"); v != "" {
 		FoodApiKey = v
 	}
@@ -474,6 +479,9 @@ func Init() {
 	}
 	if NotionDietDS == "" {
 		NotionDietDS = "82b4151b-825c-42af-9555-986f7e9938b8"
+	}
+	if NotionDietDayDS == "" {
+		NotionDietDayDS = "80ed5963-95c5-4f5a-b7ec-8af50546ffff"
 	}
 	if NotionLogDS == "" {
 		NotionLogDS = "2076c920-5f8e-4f06-995f-9ecc290ea619"
@@ -513,6 +521,7 @@ func setDash(d _Dash) {
 	NotionLogDS = d.NotionLogDS
 	NotionDayDS = d.NotionDayDS
 	NotionDietDS = d.NotionDietDS
+	NotionDietDayDS = d.NotionDietDayDS
 	FoodApiKey = d.FoodApiKey
 	FoodApiURL = d.FoodApiURL
 }

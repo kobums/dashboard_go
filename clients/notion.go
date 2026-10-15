@@ -23,9 +23,10 @@ var notionClient = &http.Client{Timeout: 20 * time.Second}
 
 // NotionPage 는 query 결과의 페이지 1개. Properties 는 이름 → 원본 JSON.
 type NotionPage struct {
-	Id         string                     `json:"id"`
-	Url        string                     `json:"url"`
-	Properties map[string]json.RawMessage `json:"properties"`
+	Id             string                     `json:"id"`
+	Url            string                     `json:"url"`
+	LastEditedTime string                     `json:"last_edited_time"`
+	Properties     map[string]json.RawMessage `json:"properties"`
 }
 
 // notionQueryAll 은 data source 의 모든 페이지를 페이지네이션하며 가져온다 (휴지통 제외).
