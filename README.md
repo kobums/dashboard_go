@@ -64,7 +64,7 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | GET | `/api/dev/summary?days=` | 병합 히트맵+통계. `days=0`(기본): **전체 기간**(백필 포함), 1~400: 해당 일수. 60분 캐시 |
 | GET | `/api/dev/recent` | GitHub+GitLab 최근 활동 병합 상위 20 (60분 캐시) |
 | GET | `/api/dev/yearly` | 연도별 컨트리뷰션 (devstat_tb 로컬 집계, 외부 API 안 씀) |
-| GET | `/api/notify/check?mode=` | **알림 판정** — 걸음·운동·커밋·독서(분, 세션 없으면 당일 읽음 여부 폴백)를 전날/전주(같은 요일)/4주 전/1년 전과 비교. `evening`=오늘 경고(부족 시만 notify), `morning`=어제 보고(항상), `auto`=시각 기준. 인증: Bearer **또는** api-key |
+| GET | `/api/notify/check?mode=` | **알림 판정** — 걸음·운동·커밋·독서(분 — 세션 0분이어도 그날 완독·진행 쪽수가 있으면 읽은 날로 보고, 둘 다 없으면 당일 읽음 여부 폴백)를 전날/전주(같은 요일)/4주 전/1년 전과 비교. `evening`=오늘 경고(부족 시만 notify), `morning`=어제 보고(항상), `auto`=시각 기준. 인증: Bearer **또는** api-key |
 | GET | `/api/notify/text?mode=` | 〃 의 **iOS 단축어용 텍스트판** — 알림 불필요면 빈 응답, 필요하면 알림 문장만(plain text). 단축어는 "가져오기→값 있으면→알림 표시" 3액션 |
 | GET | `/api/push/status` | 웹푸시 상태 — VAPID 공개키, 채널 구성 여부, 구독 수 |
 | POST | `/api/push/subscribe` | 브라우저 PushSubscription 저장 (endpoint 기준 중복 갱신) — `fetchcache_tb` 의 `push_subscriptions` 키에 JSON 배열로 보관 |

@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"dashboard/clients"
 	"dashboard/controllers"
+	"dashboard/global/log"
 )
 
 type NotifyController struct {
@@ -122,6 +124,12 @@ func (c *NotifyController) runCheck(mode string) notifyResult {
 	devCounts := queryDevByDates(dates)
 	readingMin, _ := queryReadingByDates(dates)
 	readingDone := checkReadingDone(dates[0])
+	// 세션(타이머) 없이 진행률만 올리거나 완독 처리한 날도 읽은 날로 본다
+	progressPages, finishedBooks, err := clients.ReadingActivity(dates[0])
+	if err != nil {
+		log.Error().Str("notify", "reading-activity").Msg(err.Error())
+	}
+	readingActive := progressPages > 0 || len(finishedBooks) > 0
 
 	alerts := []notifyAlert{}
 	alerts = append(alerts, buildAlert("steps", "걸음", "보", steps, false))
@@ -131,7 +139,10 @@ func (c *NotifyController) runCheck(mode string) notifyResult {
 	// 독서 — 하이브리드: 세션 분(分) 비교가 가능하면 걸음처럼 % 비교,
 	// 비교 데이터가 없으면 기존 읽음/안읽음 규칙 (세션 기록이 희박한 현실 대응)
 	readingAlert := buildAlert("reading", "독서", "분", readingMin, true)
-	if readingAlert.Message == "" {
+	if readingMin[0] <= 0 && readingActive {
+		// 세션 0분이라 분 비교로는 「부족」이 나오지만 실제로는 읽은 날 — 진행·완독으로 보고
+		readingAlert = readingActivityAlert(progressPages, finishedBooks)
+	} else if readingAlert.Message == "" {
 		readingAlert = notifyAlert{Area: "reading", Label: "독서", Unit: "", Behind: []notifyCompare{}, Ahead: []notifyCompare{}}
 		if readingDone {
 			readingAlert.Value = 1
@@ -217,6 +228,30 @@ func buildAlert(area, label, unit string, values []float64, zeroValid bool) noti
 	}
 
 	return alert
+}
+
+// readingActivityAlert 는 세션 기록 없이 진행률·완독만 있는 날의 독서 항목을 만든다 (부족 없음).
+func readingActivityAlert(pages int, finished []string) notifyAlert {
+	parts := []string{}
+	for _, title := range finished {
+		parts = append(parts, "『"+shortTitle(title)+"』 완독")
+	}
+	if pages > 0 {
+		parts = append(parts, fmt.Sprintf("%d쪽 읽음", pages))
+	}
+	return notifyAlert{
+		Area: "reading", Label: "독서", Value: float64(pages), Unit: "쪽",
+		Behind: []notifyCompare{}, Ahead: []notifyCompare{},
+		Message: "독서 — " + strings.Join(parts, " · "),
+	}
+}
+
+// shortTitle 은 부제(" - ...")를 떼어 알림 한 줄에 들어가게 한다.
+func shortTitle(title string) string {
+	if i := strings.Index(title, " - "); i > 0 {
+		return title[:i]
+	}
+	return title
 }
 
 // buildSummary 는 알림 본문(멀티라인)을 만든다 — 항목별 한 줄씩, 수치 포함.
