@@ -6,7 +6,7 @@ package clients
 //   - 표의 음식 행 → 음식 1개 = diet_tb 1행 (끼니 태그 아점→아침, 야식→간식, 그 외 모르는 태그→간식)
 //   - 표 합계와 속성 합계(사용자가 정정까지 반영한 최종값)가 다르면 차이를 「합계 보정」 행으로 넣어 하루 합계를 속성에 맞춘다
 //   - 표가 없으면 끼니 텍스트를 행으로 넣고 하루 합계는 보정 행에 싣는다
-// 탄수화물·지방은 표에 열이 없고 하루 합계 속성만 있다 — 음식별로 지어내지 않고(0) 하루 합계 전체를 「합계 보정」 행에 싣는다. 같은 날짜에 「식단 일지」 기록이 있으면 그날은 식단 일지만 쓴다(이중 집계 방지).
+// 표 열은 머리행 이름으로 찾는다(음식 | 칼로리 | 단백질 | 탄수화물 | 지방 — 탄·지 열은 선택). 탄·지 열이 없는 표는 음식별 0 이고 하루 합계가 「합계 보정」 행으로 간다. 같은 날짜에 「식단 일지」 기록이 있으면 그날은 식단 일지만 쓴다(이중 집계 방지).
 // 행 id 는 「페이지id#순번」 — 대시보드에서 수정·삭제 불가(노션 식단 기록 페이지에서 고친다).
 
 import (
@@ -37,8 +37,34 @@ var (
 )
 
 type dietDayItem struct {
-	meal, food    string
-	kcal, protein float64
+	meal, food                string
+	kcal, protein, carbs, fat float64
+}
+
+// dietDayCols 는 표 열 위치 (머리행 이름으로 찾는다, 없으면 -1). 기본 = 음식 | 칼로리 | 단백질
+type dietDayCols struct{ kcal, protein, carbs, fat int }
+
+var defaultDietDayCols = dietDayCols{kcal: 1, protein: 2, carbs: -1, fat: -1}
+
+// parseDietDayHeader 는 머리행(「음식 | 칼로리 | 단백질 | 탄수화물 | 지방」)에서 열 위치를 찾는다.
+func parseDietDayHeader(cells []string) dietDayCols {
+	cols := dietDayCols{-1, -1, -1, -1}
+	for i, c := range cells {
+		switch {
+		case strings.Contains(c, "칼로리"):
+			cols.kcal = i
+		case strings.Contains(c, "단백질"):
+			cols.protein = i
+		case strings.Contains(c, "탄수"):
+			cols.carbs = i
+		case strings.Contains(c, "지방"):
+			cols.fat = i
+		}
+	}
+	if cols.kcal < 0 {
+		return defaultDietDayCols // 머리행이 아니면 옛 3열 형식으로 본다
+	}
+	return cols
 }
 
 func dietDayNumber(re *regexp.Regexp, s string) float64 {
@@ -62,7 +88,7 @@ func dietDayMeal(tag string) string {
 }
 
 // parseDietDayRow 는 표 1행(음식 | 칼로리 | 단백질)을 음식으로 푼다. 헤더·합계 행은 false.
-func parseDietDayRow(cells []string) (dietDayItem, bool) {
+func parseDietDayRow(cells []string, cols dietDayCols) (dietDayItem, bool) {
 	if len(cells) < 2 {
 		return dietDayItem{}, false
 	}
@@ -70,9 +96,18 @@ func parseDietDayRow(cells []string) (dietDayItem, bool) {
 	if m == nil {
 		return dietDayItem{}, false // 「음식」 헤더, 「합계 (점심까지)」·「하루 합계」
 	}
-	it := dietDayItem{meal: dietDayMeal(m[1]), food: strings.TrimSpace(m[2]), kcal: dietDayNumber(dietDayKcalRe, cells[1])}
-	if len(cells) >= 3 {
-		it.protein = dietDayNumber(dietDayGramRe, cells[2])
+	cell := func(i int) string {
+		if i < 0 || i >= len(cells) {
+			return ""
+		}
+		return cells[i]
+	}
+	it := dietDayItem{
+		meal: dietDayMeal(m[1]), food: strings.TrimSpace(m[2]),
+		kcal:    dietDayNumber(dietDayKcalRe, cell(cols.kcal)),
+		protein: dietDayNumber(dietDayGramRe, cell(cols.protein)),
+		carbs:   dietDayNumber(dietDayGramRe, cell(cols.carbs)),
+		fat:     dietDayNumber(dietDayGramRe, cell(cols.fat)),
 	}
 	return it, it.food != ""
 }
@@ -91,7 +126,7 @@ func buildDietDayRows(pageId, date string, items []dietDayItem, mealTexts map[st
 	sum := Macros{}
 	if len(items) > 0 {
 		for _, it := range items {
-			m := Macros{Kcal: it.kcal, Protein: it.protein}
+			m := Macros{Kcal: it.kcal, Protein: it.protein, Carbs: it.carbs, Fat: it.fat}
 			add(it.meal, it.food, "", m)
 			sum = sum.Add(m)
 		}
@@ -104,14 +139,11 @@ func buildDietDayRows(pageId, date string, items []dietDayItem, mealTexts map[st
 	}
 
 	// 속성 합계가 최종값 — 표에서 빠졌거나 본문에서 정정한 만큼 보정
-	diff := Macros{Kcal: total.Kcal - sum.Kcal, Protein: total.Protein - sum.Protein, Carbs: total.Carbs, Fat: total.Fat}
+	// 표에 탄·지 열이 없으면 음식별 탄·지는 0 이라 하루 합계 전체가 보정 행으로 간다
+	diff := Macros{Kcal: total.Kcal - sum.Kcal, Protein: total.Protein - sum.Protein, Carbs: total.Carbs - sum.Carbs, Fat: total.Fat - sum.Fat}
 	off := func(t, d float64) bool { return t > 0 && math.Abs(d) >= 1 }
-	if off(total.Kcal, diff.Kcal) || off(total.Protein, diff.Protein) || total.Carbs > 0 || total.Fat > 0 {
-		memo := "노션 식단 기록의 하루 합계에 맞춘 차이 (표에 없는 음식·정정분)"
-		if total.Carbs > 0 || total.Fat > 0 {
-			memo += " + 탄수화물·지방 하루 합계 (음식별 값은 기록에 없음)"
-		}
-		add("간식", dietDayAdjustFood, memo, diff.Round())
+	if off(total.Kcal, diff.Kcal) || off(total.Protein, diff.Protein) || off(total.Carbs, diff.Carbs) || off(total.Fat, diff.Fat) {
+		add("간식", dietDayAdjustFood, "노션 식단 기록의 하루 합계에 맞춘 차이 (표에 없는 음식·정정분, 표에 없는 탄수화물·지방)", diff.Round())
 	}
 	return rows
 }
@@ -174,12 +206,16 @@ func dietDayItems(p NotionPage) ([]dietDayItem, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range rows {
+		cols := defaultDietDayCols
+		for i, r := range rows {
 			cells := make([]string, len(r.TableRow.Cells))
 			for i, c := range r.TableRow.Cells {
 				cells[i] = joinRichText(c)
 			}
-			if it, ok := parseDietDayRow(cells); ok {
+			if i == 0 {
+				cols = parseDietDayHeader(cells)
+			}
+			if it, ok := parseDietDayRow(cells, cols); ok {
 				items = append(items, it)
 			}
 		}
