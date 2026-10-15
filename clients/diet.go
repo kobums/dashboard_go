@@ -46,20 +46,7 @@ type dietRow struct {
 	macros                                     Macros
 }
 
-func dietRowFromPage(p NotionPage) (dietRow, bool) {
-	date := p.Date("날짜")
-	food := p.Text("음식")
-	if date == "" || food == "" {
-		return dietRow{}, false
-	}
-	return dietRow{
-		notionId: p.Id, date: date, meal: p.Select("끼니"), food: food,
-		foodCode: p.Text("식품코드"), memo: p.Text("메모"), grams: p.Number("양(g)"),
-		macros: Macros{p.Number("칼로리(kcal)"), p.Number("단백질(g)"), p.Number("탄수화물(g)"), p.Number("지방(g)")},
-	}, true
-}
-
-// SyncDiet 는 노션 식단 일지 전체를 읽어 diet_tb 를 트랜잭션 안에서 갈아끼운다. 노션 실패 시 DB 미변경.
+// SyncDiet 는 노션 「식단 기록」 전체를 읽어 diet_tb 를 트랜잭션 안에서 갈아끼운다. 노션 실패 시 DB 미변경.
 func SyncDiet() error {
 	dietSyncMutex.Lock()
 	defer dietSyncMutex.Unlock()
@@ -67,23 +54,10 @@ func SyncDiet() error {
 		return errors.New("NOTION_TOKEN 미설정")
 	}
 
-	pages, err := notionQuery(config.NotionDietDS, nil, []map[string]string{{"timestamp": "created_time", "direction": "ascending"}})
-	if err != nil {
-		return fmt.Errorf("식단 일지: %v", err)
-	}
-	var rows []dietRow
-	logged := map[string]bool{} // 식단 일지에 기록이 있는 날짜 — 식단 기록(하루 페이지)은 건너뛴다
-	for _, p := range pages {
-		if r, ok := dietRowFromPage(p); ok {
-			rows = append(rows, r)
-			logged[r.date] = true
-		}
-	}
-	dayRows, err := fetchDietDayRows(logged)
+	rows, err := fetchDietDayRows()
 	if err != nil {
 		return fmt.Errorf("식단 기록: %v", err)
 	}
-	rows = append(rows, dayRows...)
 
 	conn := models.NewConnection()
 	if conn == nil {
@@ -110,7 +84,7 @@ func SyncDiet() error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	log.Info().Str("service", "diet-sync").Int("items", len(rows)).Int("dayItems", len(dayRows)).Msg("synced")
+	log.Info().Str("service", "diet-sync").Int("items", len(rows)).Msg("synced")
 	return nil
 }
 
@@ -150,23 +124,7 @@ func (in DietLogInput) validate() error {
 	return nil
 }
 
-func dietProps(in DietLogInput) map[string]interface{} {
-	r1 := func(v float64) float64 { return math.Round(v*10) / 10 }
-	return map[string]interface{}{
-		"음식":        notionTitleValue(strings.TrimSpace(in.Food)),
-		"날짜":        notionDateValue(in.Date),
-		"끼니":        notionSelectValue(in.Meal),
-		"양(g)":      notionNumberValue(r1(in.Grams)),
-		"칼로리(kcal)": notionNumberValue(r1(in.Kcal)),
-		"단백질(g)":    notionNumberValue(r1(in.Protein)),
-		"탄수화물(g)":   notionNumberValue(r1(in.Carbs)),
-		"지방(g)":     notionNumberValue(r1(in.Fat)),
-		"식품코드":      notionRichTextValue(in.FoodCode),
-		"메모":        notionRichTextValue(in.Memo),
-	}
-}
-
-// SaveDietLog 는 음식 1개를 노션에 생성(Id 없음)·수정하고 동기화한다.
+// SaveDietLog 는 음식 1개를 노션 「식단 기록」 그날 표에 추가(Id 없음)·수정하고 동기화한다.
 func SaveDietLog(in DietLogInput) (string, error) {
 	if err := in.validate(); err != nil {
 		return "", err
@@ -178,31 +136,35 @@ func SaveDietLog(in DietLogInput) (string, error) {
 	defer dietWriteMutex.Unlock()
 
 	id := in.Id
-	if IsDietDayItem(id) {
-		return "", errors.New("노션 「식단 기록」에서 가져온 항목은 노션 페이지에서 수정해 주세요")
-	}
 	var err error
 	if id == "" {
-		id, err = notionCreatePage(config.NotionDietDS, dietProps(in))
+		err = addDietDayItems(in.Date, []DietLogInput{in})
+	} else if rowId, ok := dietDayRowBlockId(id); ok {
+		err = updateDietDayItem(rowId, in)
 	} else {
-		err = notionUpdatePage(id, dietProps(in))
+		return "", errors.New(dietReadonlyMsg)
 	}
 	if err != nil {
+		SyncDiet() // 일부만 쓰였어도 화면엔 반영
 		return "", err
 	}
 	return id, SyncDiet()
 }
 
+const dietReadonlyMsg = "이 항목(합계 보정·끼니 메모)은 노션 「식단 기록」 페이지에서 고쳐 주세요"
+
 func DeleteDietLog(id string) error {
 	if id == "" {
 		return errors.New("id 필요")
 	}
-	if IsDietDayItem(id) {
-		return errors.New("노션 「식단 기록」에서 가져온 항목은 노션 페이지에서 삭제해 주세요")
+	rowId, ok := dietDayRowBlockId(id)
+	if !ok {
+		return errors.New(dietReadonlyMsg)
 	}
 	dietWriteMutex.Lock()
 	defer dietWriteMutex.Unlock()
-	if err := notionTrashPage(id); err != nil {
+	if err := deleteDietDayItem(rowId); err != nil {
+		SyncDiet()
 		return err
 	}
 	return SyncDiet()
@@ -246,14 +208,14 @@ func CopyDiet(from, to, meal string) (int, error) {
 
 	dietWriteMutex.Lock()
 	defer dietWriteMutex.Unlock()
-	for i, it := range items {
-		if !containsString(DietMeals, it.Meal) {
-			it.Meal = "간식"
+	for i := range items {
+		if !containsString(DietMeals, items[i].Meal) {
+			items[i].Meal = "간식"
 		}
-		if _, err := notionCreatePage(config.NotionDietDS, dietProps(it)); err != nil {
-			SyncDiet() // 일부만 복사됐어도 화면엔 반영
-			return i, err
-		}
+	}
+	if err := addDietDayItems(to, items); err != nil {
+		SyncDiet() // 일부만 복사됐어도 화면엔 반영
+		return 0, err
 	}
 	return len(items), SyncDiet()
 }

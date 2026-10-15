@@ -56,7 +56,7 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | GET | `/api/diet/day?date=` | 그날 식단 — 운동일/휴식일 판정·목표·합계·끼니별 항목·자주 먹은 음식(60일) |
 | GET | `/api/diet/summary?days=` | 일별 섭취·추정 소모(BMR+활동+10%)·적자·체중 + 주간(월요일 시작) 평균·단백질 달성일·체중 변화 |
 | GET | `/api/diet/search?q=` | 식약처 식품영양성분DB 검색(1일 메모리 캐시, `FOOD_API_KEY`) — 기준량당 kcal/단백질/탄수/지방 |
-| POST | `/api/diet/log` · `/diet/log/delete` · `/diet/copy` | 음식 저장·삭제(노션 휴지통)·다른 날(끼니) 복사 → 노션 먼저 쓰고 동기화 — 노션 「식단 기록」(하루 페이지)에서 가져온 항목(id `페이지#순번`)은 수정·삭제 거부 |
+| POST | `/api/diet/log` · `/diet/log/delete` · `/diet/copy` | 음식 추가·수정·삭제·다른 날(끼니) 복사 → 노션 「식단 기록」 그날 페이지 표에 직접 쓰고 합계 재계산 후 동기화 (보정 행 `페이지#순번` 은 거부) |
 | GET/POST | `/api/diet/targets` | 운동일/휴식일 목표 매크로 + BMR (`fetchcache_tb` diet_targets) |
 | GET | `/api/reading/summary?year=&month=` | snippetapi 프록시 집계 (10분 캐시) |
 | GET | `/api/reading/daily` | 독서 세션 일별 집계 `[{date, minutes, pages, sessions}]` (10분 캐시) — 잔디·일별/주별 차트용 |
