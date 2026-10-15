@@ -49,7 +49,7 @@ func (c *ReadingController) Daily() {
 
 // Books — 완독한 책 목록 (최근 완독 순, 연도 필터는 프론트)
 func (c *ReadingController) Books() {
-	buf, err := clients.GetCached("reading_books", 10*time.Minute, clients.FetchReadingBooks)
+	buf, err := clients.GetCached("reading_books_v2", 10*time.Minute, clients.FetchReadingBooks) // v2: 완독 판정 수정 — 옛 캐시(전 상태 포함) 무시
 	if err != nil {
 		c.Error(err)
 		return
