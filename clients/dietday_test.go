@@ -34,6 +34,11 @@ func TestBuildDietDayRows(t *testing.T) {
 	if rows[0].notionId != "p#0" || !IsDietDayItem(rows[0].notionId) {
 		t.Errorf("id: %v", rows[0].notionId)
 	}
+	// 탄·지는 음식별 0, 하루 합계는 보정 행에 (칼로리·단백질이 맞아도 보정 행 생김)
+	rows = buildDietDayRows("p", "d", items, nil, Macros{Kcal: 1480, Protein: 86, Carbs: 118, Fat: 77})
+	if len(rows) != 3 || rows[0].macros.Carbs != 0 || rows[2].macros != (Macros{Carbs: 118, Fat: 77}) {
+		t.Errorf("carbs/fat: %+v", rows)
+	}
 	// 합계가 맞으면 보정 행 없음
 	if rows := buildDietDayRows("p", "d", items, nil, Macros{Kcal: 1480, Protein: 86}); len(rows) != 2 {
 		t.Errorf("no adjust expected: %+v", rows)
