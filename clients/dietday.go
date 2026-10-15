@@ -6,11 +6,12 @@ package clients
 //   - 표의 음식 행 → 음식 1개 = diet_tb 1행 (끼니 태그 아점→아침, 야식→간식, 그 외 모르는 태그→간식)
 //   - 표 합계와 속성 합계(사용자가 정정까지 반영한 최종값)가 다르면 차이를 「합계 보정」 행으로 넣어 하루 합계를 속성에 맞춘다
 //   - 표가 없으면 끼니 텍스트를 행으로 넣고 하루 합계는 보정 행에 싣는다
-// 탄수화물·지방은 이 DB 에 없어서 0. 같은 날짜에 「식단 일지」 기록이 있으면 그날은 식단 일지만 쓴다(이중 집계 방지).
+// 탄수화물·지방은 표에 열이 없고 하루 합계 속성만 있다 — 음식별로 지어내지 않고(0) 하루 합계 전체를 「합계 보정」 행에 싣는다. 같은 날짜에 「식단 일지」 기록이 있으면 그날은 식단 일지만 쓴다(이중 집계 방지).
 // 행 id 는 「페이지id#순번」 — 대시보드에서 수정·삭제 불가(노션 식단 기록 페이지에서 고친다).
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -103,9 +104,14 @@ func buildDietDayRows(pageId, date string, items []dietDayItem, mealTexts map[st
 	}
 
 	// 속성 합계가 최종값 — 표에서 빠졌거나 본문에서 정정한 만큼 보정
-	diff := Macros{Kcal: total.Kcal - sum.Kcal, Protein: total.Protein - sum.Protein}
-	if (total.Kcal > 0 && (diff.Kcal >= 1 || diff.Kcal <= -1)) || (total.Protein > 0 && (diff.Protein >= 1 || diff.Protein <= -1)) {
-		add("간식", dietDayAdjustFood, "노션 식단 기록의 하루 합계에 맞춘 차이 (표에 없는 음식·정정분)", diff.Round())
+	diff := Macros{Kcal: total.Kcal - sum.Kcal, Protein: total.Protein - sum.Protein, Carbs: total.Carbs, Fat: total.Fat}
+	off := func(t, d float64) bool { return t > 0 && math.Abs(d) >= 1 }
+	if off(total.Kcal, diff.Kcal) || off(total.Protein, diff.Protein) || total.Carbs > 0 || total.Fat > 0 {
+		memo := "노션 식단 기록의 하루 합계에 맞춘 차이 (표에 없는 음식·정정분)"
+		if total.Carbs > 0 || total.Fat > 0 {
+			memo += " + 탄수화물·지방 하루 합계 (음식별 값은 기록에 없음)"
+		}
+		add("간식", dietDayAdjustFood, memo, diff.Round())
 	}
 	return rows
 }
@@ -205,7 +211,7 @@ func fetchDietDayRows(skipDates map[string]bool) ([]dietRow, error) {
 		for _, meal := range DietMeals {
 			mealTexts[meal] = p.Text(meal)
 		}
-		total := Macros{Kcal: p.Number("칼로리(kcal)"), Protein: p.Number("단백질(g)")}
+		total := Macros{Kcal: p.Number("칼로리(kcal)"), Protein: p.Number("단백질(g)"), Carbs: p.Number("탄수화물(g)"), Fat: p.Number("지방(g)")}
 		rows = append(rows, buildDietDayRows(p.Id, date, items, mealTexts, total)...)
 	}
 	return rows, nil
