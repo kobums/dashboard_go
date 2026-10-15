@@ -34,6 +34,16 @@ type snippetUserBook struct {
 
 var readingSnapMutex sync.Mutex
 
+// 마지막 스냅샷 메모리 보관 — 홈 배너가 /notify/check 를 부를 때마다 snippet·원격 DB 왕복을 하지 않도록.
+// 맵은 매번 새로 만들고 저장 후엔 수정하지 않으므로 읽기 공유가 안전하다.
+const readingSnapFresh = 5 * time.Minute
+
+var lastReadingSnap struct {
+	at    time.Time
+	books []snippetUserBook
+	snaps readingSnapshots
+}
+
 func loadReadingSnapshots(conn *models.Connection) readingSnapshots {
 	snaps := readingSnapshots{}
 	manager := models.NewFetchcacheManager(conn)
@@ -97,7 +107,22 @@ func snapshotReadingProgress() ([]snippetUserBook, readingSnapshots, error) {
 		}
 	}
 	saveReadingSnapshots(conn, snaps)
+
+	lastReadingSnap.at = time.Now()
+	lastReadingSnap.books = books
+	lastReadingSnap.snaps = snaps
 	return books, snaps, nil
+}
+
+// recentReadingSnapshot 은 readingSnapFresh 안의 스냅샷이 있으면 재사용하고, 없으면 새로 찍는다.
+func recentReadingSnapshot() ([]snippetUserBook, readingSnapshots, error) {
+	readingSnapMutex.Lock()
+	at, books, snaps := lastReadingSnap.at, lastReadingSnap.books, lastReadingSnap.snaps
+	readingSnapMutex.Unlock()
+	if snaps != nil && time.Since(at) < readingSnapFresh && at.Format("2006-01-02") == time.Now().Format("2006-01-02") {
+		return books, snaps, nil
+	}
+	return snapshotReadingProgress()
 }
 
 // SnapshotReadingProgress 는 스케줄러용 — 오늘 스냅샷만 갱신한다.
@@ -111,11 +136,10 @@ func SnapshotReadingProgress() error {
 //	pages    : 직전 스냅샷 대비 readPage 증가분 합 (직전 스냅샷이 없으면 0 — 비교 불가)
 //	finished : 그날 완독 처리한 책 제목
 func ReadingActivity(date string) (pages int, finished []string, err error) {
-	books, snaps, err := snapshotReadingProgress()
+	books, snaps, err := recentReadingSnapshot()
 	if err != nil {
 		return 0, nil, err
 	}
-
 	return progressPages(snaps, date), finishedOn(books, date), nil
 }
 
