@@ -14,6 +14,7 @@ package clients
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -25,10 +26,31 @@ type LiftSet struct {
 	Bodyweight bool    `json:"bodyweight"`
 }
 
+var setNoteParens = regexp.MustCompile(`[(（][^)）]*[)）]`)
+
+// normalizeSetText 는 기호를 통일하고, 세트 옆에 흔히 붙이는 메모를 떼어낸다:
+// 괄호 메모 "25×15×4 (세트 간 횟수 유지)"·"20(빈바)×20", 화살표 뒤 "30×15×4 → 되면 35".
 func normalizeSetText(s string) string {
+	// 괄호를 먼저 지운다 — 괄호 안에 화살표가 있는 "30×15×4 (한 번에 → 되면 35)" 도 통째로 메모
+	s = setNoteParens.ReplaceAllString(s, "")
+	if i := strings.IndexAny(s, "(（"); i >= 0 { // 닫히지 않은 괄호는 끝까지 메모
+		s = s[:i]
+	}
+	if i := strings.Index(s, "→"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, "->"); i >= 0 {
+		s = s[:i]
+	}
 	r := strings.NewReplacer("×", "x", "X", "x", "*", "x", "✕", "x", "kg", "", "KG", "", "Kg", "", "～", "~", "–", "~")
 	return strings.TrimSpace(r.Replace(s))
 }
+
+// 세트 앞에 붙는 설명어 — 드롭세트는 그냥 세트로 센다
+var setLabelPrefixes = []string{"드롭세트", "드롭", "드랍"}
+
+// 무게 자리 없이 붙여 쓴 맨몸 표기: "맨몸 10", "맨몸 10×3", "BW10"
+var bwPrefixes = []string{"맨몸", "BW", "bw", "Bw"}
 
 // ParseSets 는 세트 표기 문자열을 세트 목록으로 편다. 빈 문자열은 (nil, nil).
 func ParseSets(text string) ([]LiftSet, error) {
@@ -49,6 +71,19 @@ func ParseSets(text string) ([]LiftSet, error) {
 			item = strings.ReplaceAll(strings.TrimSpace(item), " ", "")
 			if item == "" {
 				continue
+			}
+			for _, label := range setLabelPrefixes {
+				if strings.HasPrefix(item, label) {
+					item = strings.TrimPrefix(item, label)
+					break
+				}
+			}
+			// "맨몸10" / "맨몸10x3" → 맨몸 무게로 풀어 쓴 꼴("BWx10x3")로 바꾼다
+			for _, bw := range bwPrefixes {
+				if rest := strings.TrimPrefix(item, bw); rest != item && rest != "" && rest[0] >= '0' && rest[0] <= '9' {
+					item = "BWx" + rest
+					break
+				}
 			}
 			parts := strings.Split(item, "x")
 			var repsTok, setsTok string
