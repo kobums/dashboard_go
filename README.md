@@ -88,7 +88,7 @@ ntfy(`clients/ntfy.go`, JSON publish — 한글 헤더 문제 없음)와 웹푸�
 | `healthmetric_tb` (hm_*) | 일별 건강 지표 (steps/weight/...) | UNIQUE(metricdate, name) upsert |
 | `devstat_tb` (ds_*) | 소스·일별 컨트리뷰션 (백필 포함 2019~) | UNIQUE(source, statdate) upsert |
 | `liftday_tb` (ld_*) / `liftexercise_tb` (le_*) / `liftset_tb` (ls_*) | 노션 운동 캘린더(하루)·운동 일지(종목)·파싱된 세트 **복제본** — buildtool-model 대상 아님, 직접 수정 금지 | 동기화마다 전체 교체 |
-| `diet_tb` (dt_*) | 노션 「식단 일지」 복제본 — buildtool-model 대상 아님 | 동기화마다 전체 교체 |
+| `diet_tb` (dt_*) | 노션 「식단 기록」 복제본 — buildtool-model 대상 아님 | `services/dietsync.go` 가 10분마다(+쓰기 직후) 전체 교체. 같은 날짜 페이지가 여럿이면 최근 수정 페이지만 |
 | `fetchcache_tb` (fc_*) | 외부 API 응답 캐시 (SWR) — 앞단에 프로세스 인메모리 캐시가 있어 TTL 안 반복 조회는 DB 왕복 없음 | UNIQUE(cachekey) |
 
 ## 설정

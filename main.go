@@ -30,6 +30,7 @@ func main() {
 
 	services.StartNotifyScheduler()
 	services.StartLiftSync()
+	services.StartDietSync()
 	services.StartReadingSnapshot()
 	services.Http()
 }
