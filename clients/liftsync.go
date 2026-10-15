@@ -165,6 +165,11 @@ func liftExerciseFromPage(p NotionPage) (liftExerciseRow, bool) {
 		e.dayNotionId = rel[0]
 	}
 
+	// 유산소(풋살·주짓수 등)는 세트 칸에 "스파링 4분 × 5" 처럼 자유롭게 적는다 — 세트로 풀지 않고 원문만 보존
+	if e.part == liftCardioPart {
+		return e, true
+	}
+
 	var errs []string
 	warm, err := ParseSets(e.warmup)
 	if err != nil {
