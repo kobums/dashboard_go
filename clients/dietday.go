@@ -7,7 +7,8 @@ package clients
 //   - 표 합계와 속성 합계(사용자가 정정까지 반영한 최종값)가 다르면 차이를 「합계 보정」 행으로 넣어 하루 합계를 속성에 맞춘다
 //   - 표가 없으면 끼니 텍스트를 행으로 넣고 하루 합계는 보정 행에 싣는다
 // 표 열은 머리행 이름으로 찾는다(음식 | 칼로리 | 단백질 | 탄수화물 | 지방 — 탄·지 열은 선택). 탄·지 열이 없는 표는 음식별 0 이고 하루 합계가 「합계 보정」 행으로 간다. 같은 날짜에 「식단 일지」 기록이 있으면 그날은 식단 일지만 쓴다(이중 집계 방지).
-// 행 id 는 「페이지id#순번」 — 대시보드에서 수정·삭제 불가(노션 식단 기록 페이지에서 고친다).
+// 음식 행 id = "r:"+표 행 블록 id (대시보드에서 수정·삭제 — dietdaywrite.go). 보정 행·끼니 텍스트 폴백 행은 「페이지id#순번」 = 읽기 전용.
+// 「식단 일지」(음식 1행 DB)는 더 이상 쓰지 않는다 — 노션과 대시보드가 「식단 기록」 하나를 본다.
 
 import (
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"dashboard/global/config"
 )
@@ -25,8 +27,8 @@ const (
 	dietDayAdjustFood = "합계 보정" // 복사 대상에서 뺀다 (음수일 수 있고 실제 음식이 아님)
 )
 
-// IsDietDayItem 은 「식단 기록」에서 가져온 (대시보드에서 고칠 수 없는) 행인지.
-func IsDietDayItem(id string) bool { return strings.Contains(id, dietDayIdSep) }
+// isDietDayReadonly 는 대시보드에서 고칠 수 없는 행(보정·끼니 텍스트 폴백)인지.
+func isDietDayReadonly(id string) bool { return strings.Contains(id, dietDayIdSep) }
 
 var dietDayMealAlias = map[string]string{"아점": "아침", "브런치": "아침", "야식": "간식", "운동전": "운동 전"}
 
@@ -34,11 +36,13 @@ var (
 	dietDayTagRe  = regexp.MustCompile(`^\s*\[([^\]]+)\]\s*(.+)$`)
 	dietDayKcalRe = regexp.MustCompile(`([\d,.]+)\s*kcal`)
 	dietDayGramRe = regexp.MustCompile(`([\d,.]+)\s*g`)
+	// 음식 이름 끝의 양 「햇반 작은 공기 (130g)」 — 대시보드 입력도 이 꼴로 쓴다
+	dietDayFoodGramsRe = regexp.MustCompile(`^(.*\S)\s*\((\d+(?:\.\d+)?)g\)$`)
 )
 
 type dietDayItem struct {
-	meal, food                string
-	kcal, protein, carbs, fat float64
+	rowId, meal, food                string
+	grams, kcal, protein, carbs, fat float64
 }
 
 // dietDayCols 는 표 열 위치 (머리행 이름으로 찾는다, 없으면 -1). 기본 = 음식 | 칼로리 | 단백질
@@ -109,6 +113,10 @@ func parseDietDayRow(cells []string, cols dietDayCols) (dietDayItem, bool) {
 		carbs:   dietDayNumber(dietDayGramRe, cell(cols.carbs)),
 		fat:     dietDayNumber(dietDayGramRe, cell(cols.fat)),
 	}
+	if m := dietDayFoodGramsRe.FindStringSubmatch(it.food); m != nil {
+		it.food = m[1]
+		it.grams, _ = strconv.ParseFloat(m[2], 64)
+	}
 	return it, it.food != ""
 }
 
@@ -128,6 +136,10 @@ func buildDietDayRows(pageId, date string, items []dietDayItem, mealTexts map[st
 		for _, it := range items {
 			m := Macros{Kcal: it.kcal, Protein: it.protein, Carbs: it.carbs, Fat: it.fat}
 			add(it.meal, it.food, "", m)
+			if it.rowId != "" {
+				rows[len(rows)-1].notionId = dietDayRowPrefix + it.rowId
+			}
+			rows[len(rows)-1].grams = it.grams
 			sum = sum.Add(m)
 		}
 	} else {
@@ -149,8 +161,11 @@ func buildDietDayRows(pageId, date string, items []dietDayItem, mealTexts map[st
 }
 
 type notionBlock struct {
-	Id       string `json:"id"`
-	Type     string `json:"type"`
+	Id    string `json:"id"`
+	Type  string `json:"type"`
+	Table struct {
+		TableWidth int `json:"table_width"`
+	} `json:"table"`
 	TableRow struct {
 		Cells [][]notionRichText `json:"cells"`
 	} `json:"table_row"`
@@ -216,16 +231,20 @@ func dietDayItems(p NotionPage) ([]dietDayItem, error) {
 				cols = parseDietDayHeader(cells)
 			}
 			if it, ok := parseDietDayRow(cells, cols); ok {
+				it.rowId = r.Id
 				items = append(items, it)
 			}
 		}
 	}
-	dietDayCache.Store(p.Id, dietDayCacheEntry{edited: p.LastEditedTime, items: items})
+	// last_edited_time 은 분 단위라, 방금(2분 안) 고친 페이지는 같은 분 안의 다음 수정을 놓칠 수 있어 캐시하지 않는다
+	if edited, err := time.Parse(time.RFC3339, p.LastEditedTime); err == nil && time.Since(edited) > 2*time.Minute {
+		dietDayCache.Store(p.Id, dietDayCacheEntry{edited: p.LastEditedTime, items: items})
+	}
 	return items, nil
 }
 
-// fetchDietDayRows 는 「식단 기록」 전체를 diet_tb 행으로 만든다. skipDates 날짜는 건너뛴다.
-func fetchDietDayRows(skipDates map[string]bool) ([]dietRow, error) {
+// fetchDietDayRows 는 「식단 기록」 전체를 diet_tb 행으로 만든다.
+func fetchDietDayRows() ([]dietRow, error) {
 	if config.NotionDietDayDS == "" {
 		return nil, nil
 	}
@@ -236,7 +255,7 @@ func fetchDietDayRows(skipDates map[string]bool) ([]dietRow, error) {
 	rows := []dietRow{}
 	for _, p := range pages {
 		date := p.Date("날짜")
-		if date == "" || skipDates[date] {
+		if date == "" {
 			continue
 		}
 		items, err := dietDayItems(p)

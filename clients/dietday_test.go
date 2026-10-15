@@ -1,6 +1,9 @@
 package clients
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseDietDayRow(t *testing.T) {
 	cases := []struct {
@@ -8,10 +11,10 @@ func TestParseDietDayRow(t *testing.T) {
 		ok    bool
 		want  dietDayItem
 	}{
-		{[]string{"[아침] 계란 3개", "약 230kcal", "약 18g"}, true, dietDayItem{"아침", "계란 3개", 230, 18, 0, 0}},
-		{[]string{"[야식] 치킨 (반 마리 기준)", "약 1,100kcal", "약 55g"}, true, dietDayItem{"간식", "치킨 (반 마리 기준)", 1100, 55, 0, 0}},
-		{[]string{"[아점] 밥 1공기", "약 310kcal", "약 6g"}, true, dietDayItem{"아침", "밥 1공기", 310, 6, 0, 0}},
-		{[]string{"[저녁] 사이다 1캔", "약 110kcal", "0g"}, true, dietDayItem{"저녁", "사이다 1캔", 110, 0, 0, 0}},
+		{[]string{"[아침] 계란 3개", "약 230kcal", "약 18g"}, true, dietDayItem{meal: "아침", food: "계란 3개", kcal: 230, protein: 18, carbs: 0, fat: 0}},
+		{[]string{"[야식] 치킨 (반 마리 기준)", "약 1,100kcal", "약 55g"}, true, dietDayItem{meal: "간식", food: "치킨 (반 마리 기준)", kcal: 1100, protein: 55, carbs: 0, fat: 0}},
+		{[]string{"[아점] 밥 1공기", "약 310kcal", "약 6g"}, true, dietDayItem{meal: "아침", food: "밥 1공기", kcal: 310, protein: 6, carbs: 0, fat: 0}},
+		{[]string{"[저녁] 사이다 1캔", "약 110kcal", "0g"}, true, dietDayItem{meal: "저녁", food: "사이다 1캔", kcal: 110, protein: 0, carbs: 0, fat: 0}},
 		{[]string{"음식", "칼로리", "단백질"}, false, dietDayItem{}},
 		{[]string{"하루 합계", "약 2,970kcal", "약 145g"}, false, dietDayItem{}},
 		{[]string{"**합계 (점심까지)**", "약 1,530kcal", "약 75g"}, false, dietDayItem{}},
@@ -25,13 +28,13 @@ func TestParseDietDayRow(t *testing.T) {
 }
 
 func TestBuildDietDayRows(t *testing.T) {
-	items := []dietDayItem{{"점심", "결혼식 뷔페", 900, 60, 0, 0}, {"저녁", "빅맥 1개", 580, 26, 0, 0}}
+	items := []dietDayItem{dietDayItem{meal: "점심", food: "결혼식 뷔페", kcal: 900, protein: 60, carbs: 0, fat: 0}, dietDayItem{meal: "저녁", food: "빅맥 1개", kcal: 580, protein: 26, carbs: 0, fat: 0}}
 	// 10/11: 표에 프로틴 쉐이크가 빠져 속성 합계(1590/106)와 110kcal·20g 차이
 	rows := buildDietDayRows("p", "2026-10-11", items, nil, Macros{Kcal: 1590, Protein: 106})
 	if len(rows) != 3 || rows[2].food != dietDayAdjustFood || rows[2].macros.Kcal != 110 || rows[2].macros.Protein != 20 {
 		t.Fatalf("adjust row: %+v", rows)
 	}
-	if rows[0].notionId != "p#0" || !IsDietDayItem(rows[0].notionId) {
+	if rows[0].notionId != "p#0" || !isDietDayReadonly(rows[0].notionId) {
 		t.Errorf("id: %v", rows[0].notionId)
 	}
 	// 탄·지는 음식별 0, 하루 합계는 보정 행에 (칼로리·단백질이 맞아도 보정 행 생김)
@@ -60,8 +63,39 @@ func TestDietDayColumns(t *testing.T) {
 		t.Errorf("3 cols header: %+v", c)
 	}
 	// 탄·지가 음식별로 있고 합이 맞으면 보정 행 없음
-	items := []dietDayItem{{"점심", "a", 900, 60, 50, 40}, {"저녁", "b", 580, 26, 68, 37}}
+	items := []dietDayItem{dietDayItem{meal: "점심", food: "a", kcal: 900, protein: 60, carbs: 50, fat: 40}, dietDayItem{meal: "저녁", food: "b", kcal: 580, protein: 26, carbs: 68, fat: 37}}
 	if rows := buildDietDayRows("p", "d", items, nil, Macros{Kcal: 1480, Protein: 86, Carbs: 118, Fat: 77}); len(rows) != 2 {
 		t.Errorf("no adjust expected: %+v", rows)
+	}
+}
+
+func TestDietDayGramsAndIds(t *testing.T) {
+	it, ok := parseDietDayRow([]string{"[저녁] 햇반 작은 공기 (130g)", "190kcal", "약 4g"}, defaultDietDayCols)
+	if !ok || it.food != "햇반 작은 공기" || it.grams != 130 {
+		t.Errorf("grams: %+v", it)
+	}
+	in := DietLogInput{Meal: "점심", Food: "닭가슴살", Grams: 100, Kcal: 109.5, Protein: 23, Carbs: 0, Fat: 1.2}
+	cells := dietDayCells(in, 5, parseDietDayHeader(dietDayHeader))
+	if want := []string{"[점심] 닭가슴살 (100g)", "109.5kcal", "23g", "0g", "1.2g"}; strings.Join(cells, "|") != strings.Join(want, "|") {
+		t.Errorf("cells: %v", cells)
+	}
+	back, _ := parseDietDayRow(cells, parseDietDayHeader(dietDayHeader))
+	if back.food != "닭가슴살" || back.grams != 100 || back.kcal != 109.5 || back.fat != 1.2 {
+		t.Errorf("round trip: %+v", back)
+	}
+	rows := buildDietDayRows("p", "d", []dietDayItem{{rowId: "abc", meal: "점심", food: "x", kcal: 10}}, nil, Macros{Kcal: 10})
+	if rows[0].notionId != "r:abc" || isDietDayReadonly(rows[0].notionId) {
+		t.Errorf("row id: %v", rows[0].notionId)
+	}
+	if id, ok := dietDayRowBlockId("r:abc"); !ok || id != "abc" {
+		t.Errorf("block id: %v %v", id, ok)
+	}
+}
+
+func TestFmtDietNum(t *testing.T) {
+	for in, want := range map[float64]string{2445: "2,445", 123.6: "123.6", 0: "0", 1100: "1,100", 1234567: "1,234,567", 1.25: "1.3", 109.5: "109.5"} {
+		if got := fmtDietNum(in); got != want {
+			t.Errorf("%v: got %s want %s", in, got, want)
+		}
 	}
 }
