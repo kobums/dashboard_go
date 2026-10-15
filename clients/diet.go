@@ -72,11 +72,18 @@ func SyncDiet() error {
 		return fmt.Errorf("식단 일지: %v", err)
 	}
 	var rows []dietRow
+	logged := map[string]bool{} // 식단 일지에 기록이 있는 날짜 — 식단 기록(하루 페이지)은 건너뛴다
 	for _, p := range pages {
 		if r, ok := dietRowFromPage(p); ok {
 			rows = append(rows, r)
+			logged[r.date] = true
 		}
 	}
+	dayRows, err := fetchDietDayRows(logged)
+	if err != nil {
+		return fmt.Errorf("식단 기록: %v", err)
+	}
+	rows = append(rows, dayRows...)
 
 	conn := models.NewConnection()
 	if conn == nil {
@@ -103,7 +110,7 @@ func SyncDiet() error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	log.Info().Str("service", "diet-sync").Int("items", len(rows)).Msg("synced")
+	log.Info().Str("service", "diet-sync").Int("items", len(rows)).Int("dayItems", len(dayRows)).Msg("synced")
 	return nil
 }
 
@@ -171,6 +178,9 @@ func SaveDietLog(in DietLogInput) (string, error) {
 	defer dietWriteMutex.Unlock()
 
 	id := in.Id
+	if IsDietDayItem(id) {
+		return "", errors.New("노션 「식단 기록」에서 가져온 항목은 노션 페이지에서 수정해 주세요")
+	}
 	var err error
 	if id == "" {
 		id, err = notionCreatePage(config.NotionDietDS, dietProps(in))
@@ -186,6 +196,9 @@ func SaveDietLog(in DietLogInput) (string, error) {
 func DeleteDietLog(id string) error {
 	if id == "" {
 		return errors.New("id 필요")
+	}
+	if IsDietDayItem(id) {
+		return errors.New("노션 「식단 기록」에서 가져온 항목은 노션 페이지에서 삭제해 주세요")
 	}
 	dietWriteMutex.Lock()
 	defer dietWriteMutex.Unlock()
@@ -207,8 +220,8 @@ func CopyDiet(from, to, meal string) (int, error) {
 	if conn == nil {
 		return 0, errors.New("db connection failed")
 	}
-	q := "SELECT dt_meal, dt_food, dt_grams, dt_kcal, dt_protein, dt_carbs, dt_fat, dt_foodcode, dt_memo FROM diet_tb WHERE dt_date = ?"
-	args := []interface{}{from}
+	q := "SELECT dt_meal, dt_food, dt_grams, dt_kcal, dt_protein, dt_carbs, dt_fat, dt_foodcode, dt_memo FROM diet_tb WHERE dt_date = ? AND dt_food <> ?"
+	args := []interface{}{from, dietDayAdjustFood}
 	if meal != "" {
 		q += " AND dt_meal = ?"
 		args = append(args, meal)
