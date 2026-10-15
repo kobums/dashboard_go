@@ -139,7 +139,7 @@ func loadDietDayTables(pageId string) ([]dietDayTable, error) {
 func findDietDayPage(date string) (*NotionPage, error) {
 	pages, err := notionQuery(config.NotionDietDayDS,
 		map[string]interface{}{"property": "날짜", "date": map[string]string{"equals": date}},
-		[]map[string]string{{"timestamp": "created_time", "direction": "ascending"}})
+		[]map[string]string{{"timestamp": "last_edited_time", "direction": "descending"}}) // 중복이면 읽기(fetchDietDayRows)와 같은 페이지
 	if err != nil || len(pages) == 0 {
 		return nil, err
 	}

@@ -6,7 +6,7 @@ package clients
 //   - 표의 음식 행 → 음식 1개 = diet_tb 1행 (끼니 태그 아점→아침, 야식→간식, 그 외 모르는 태그→간식)
 //   - 표 합계와 속성 합계(사용자가 정정까지 반영한 최종값)가 다르면 차이를 「합계 보정」 행으로 넣어 하루 합계를 속성에 맞춘다
 //   - 표가 없으면 끼니 텍스트를 행으로 넣고 하루 합계는 보정 행에 싣는다
-// 표 열은 머리행 이름으로 찾는다(음식 | 칼로리 | 단백질 | 탄수화물 | 지방 — 탄·지 열은 선택). 탄·지 열이 없는 표는 음식별 0 이고 하루 합계가 「합계 보정」 행으로 간다. 같은 날짜에 「식단 일지」 기록이 있으면 그날은 식단 일지만 쓴다(이중 집계 방지).
+// 표 열은 머리행 이름으로 찾는다(음식 | 칼로리 | 단백질 | 탄수화물 | 지방 — 탄·지 열은 선택). 탄·지 열이 없는 표는 음식별 0 이고 하루 합계가 「합계 보정」 행으로 간다. 같은 날짜 페이지가 여러 개면 최근 수정한 하나만 읽는다(이중 집계 방지).
 // 음식 행 id = "r:"+표 행 블록 id (대시보드에서 수정·삭제 — dietdaywrite.go). 보정 행·끼니 텍스트 폴백 행은 「페이지id#순번」 = 읽기 전용.
 // 「식단 일지」(음식 1행 DB)는 더 이상 쓰지 않는다 — 노션과 대시보드가 「식단 기록」 하나를 본다.
 
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"dashboard/global/config"
+	"dashboard/global/log"
 )
 
 const (
@@ -252,10 +253,25 @@ func fetchDietDayRows() ([]dietRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows := []dietRow{}
+	// 같은 날짜 페이지가 여러 개면(노션에서 새로 만든 경우 등) 가장 최근 수정한 하나만 — 이중 집계 방지, 쓰기(findDietDayPage)도 같은 페이지
+	latest := map[string]NotionPage{}
 	for _, p := range pages {
 		date := p.Date("날짜")
 		if date == "" {
+			continue
+		}
+		if q, ok := latest[date]; ok {
+			log.Warn().Str("service", "diet-sync").Str("date", date).Msg("같은 날짜 페이지 중복 — 최근 수정 페이지만 사용")
+			if q.LastEditedTime >= p.LastEditedTime {
+				continue
+			}
+		}
+		latest[date] = p
+	}
+	rows := []dietRow{}
+	for _, p := range pages {
+		date := p.Date("날짜")
+		if date == "" || latest[date].Id != p.Id {
 			continue
 		}
 		items, err := dietDayItems(p)
