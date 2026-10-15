@@ -155,7 +155,8 @@ func FetchReadingDaily() ([]byte, error) {
 }
 
 // FetchReadingBooks 는 완독한 책 목록을 만든다 (연도 필터는 프론트에서).
-// 완독 판정: status 가 done/completed 이거나 endDate 가 있는 것 (snippet 에 두 값이 혼재).
+// 완독 판정은 status(completed, 옛 값 done)로만 한다 — snippet 은 읽을 예정·읽는 중·중단 책에도
+// endDate 를 채워 두므로 endDate 유무로는 구분되지 않는다.
 func FetchReadingBooks() ([]byte, error) {
 	buf, err := snippetGet("/userbooks")
 	if err != nil {
@@ -183,7 +184,7 @@ func FetchReadingBooks() ([]byte, error) {
 	}
 	done := []doneBook{}
 	for _, b := range books {
-		if b.Status != "done" && b.Status != "completed" && b.EndDate == "" {
+		if b.Status != "done" && b.Status != "completed" {
 			continue
 		}
 		rating := 0
