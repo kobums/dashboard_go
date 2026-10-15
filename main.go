@@ -30,5 +30,6 @@ func main() {
 
 	services.StartNotifyScheduler()
 	services.StartLiftSync()
+	services.StartReadingSnapshot()
 	services.Http()
 }
