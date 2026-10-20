@@ -53,6 +53,18 @@ func Http() {
 	}))
 
 
+	// 로그(webdata/log)·임시파일(webdata/temp)은 UploadPath 아래에 있으므로 정적 공개 경로에서 제외한다.
+	// 정적 핸들러와 같은 정규화 경로(fasthttp URI.Path)로 검사해 "//", "../" 우회를 막는다.
+	app.Use(func(ctx *fiber.Ctx) error {
+		p := string(ctx.Context().URI().Path())
+		for _, blocked := range []string{"/webdata/log", "/webdata/temp"} {
+			if p == blocked || strings.HasPrefix(p, blocked+"/") {
+				return ctx.SendStatus(fiber.StatusNotFound)
+			}
+		}
+		return ctx.Next()
+	})
+
 	// app.Static("/webdata", config.DocumentRoot)
 	app.Static("/webdata", config.UploadPath)
 

@@ -3,7 +3,6 @@ package global
 import (
 	"bytes"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -171,11 +170,7 @@ func SendSMS(tel string, content string) bool {
 	}
 	rq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	hc := &http.Client{Timeout: 2 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	hc := &http.Client{Timeout: 2 * time.Second}
 
 	rs, e := hc.Do(rq)
 	if e != nil {
