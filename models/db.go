@@ -2,6 +2,8 @@ package models
 
 import (
 	"fmt"
+	"reflect"
+	"strings"
 	"dashboard/global/config"
 	"dashboard/global/log"
 	"regexp"
@@ -219,4 +221,114 @@ func (c Double) MarshalJSON() ([]byte, error) {
 	}
 
 	return []byte(fmt.Sprintf("%v", float64(c))), nil
+}
+
+// whereColumnPattern 은 Where.Column(과 GroupBy 컬럼명)으로 허용하는 형식이다:
+// SQL 식별자 하나 또는 "별칭.식별자". 컬럼명과 연산자는 자리표시자로 바인딩할 수 없어
+// 쿼리에 그대로 이어붙으므로, 이 형식이 아니면 SQL 에 넣지 않는다.
+var whereColumnPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
+
+// whereCompares 는 Where.Compare 로 허용하는 연산자 목록이다(소문자 기준).
+var whereCompares = map[string]bool{
+	"=": true, "!=": true, "<>": true, "<": true, "<=": true, ">": true, ">=": true,
+	"like": true, "not like": true, "in": true, "not in": true, "between": true,
+}
+
+// ValidColumn 은 name 을 SQL 식별자로 그대로 이어붙여도 안전한지 확인한다.
+func ValidColumn(name string) bool {
+	return whereColumnPattern.MatchString(name)
+}
+
+// wherePlaceholder 는 DB 종류에 맞는 자리표시자를 돌려준다(Postgres 는 $N, 그 외 ?).
+// pos 가 nil 이면 항상 ? 를 쓴다(번호를 추적하지 않는 MySQL 전용 쿼리용).
+func wherePlaceholder(pos *int) string {
+	if pos != nil && config.Database.Type == config.Postgresql {
+		s := fmt.Sprintf("$%v", *pos)
+		*pos++
+		return s
+	}
+	return "?"
+}
+
+// whereValues 는 in / not in / between 값을 바인딩 값 목록으로 펼친다.
+// 슬라이스·배열은 원소별로, 문자열은 콤마로 나눠서(예전 "1,2,3" 형태 호환), 그 외는 값 하나로 본다.
+func whereValues(value interface{}) []interface{} {
+	if value == nil {
+		return nil
+	}
+	if s, ok := value.(string); ok {
+		var ret []interface{}
+		for _, part := range strings.Split(s, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				ret = append(ret, part)
+			}
+		}
+		return ret
+	}
+	if _, ok := value.([]byte); ok {
+		return []interface{}{value}
+	}
+	rv := reflect.ValueOf(value)
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return []interface{}{value}
+	}
+	ret := make([]interface{}, 0, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		ret = append(ret, rv.Index(i).Interface())
+	}
+	return ret
+}
+
+// WhereClause 는 Where 하나를 " and <컬럼> <연산자> <자리표시자>" 로 만들고 바인딩 값을 돌려준다.
+// 생성된 모델의 Find/Count/MakeQuery/GroupBy 가 모두 이 함수를 거친다.
+//
+//   - prefix 는 "w_" 같은 테이블 컬럼 접두어로, Column 에 "_" 가 없을 때만 붙인다(기존 규칙).
+//   - Column 은 식별자 형식, Compare 는 whereCompares 에 있는 연산자만 허용한다.
+//   - in / not in 값은 원소마다 자리표시자로 바인딩한다(값을 SQL 에 이어붙이지 않는다).
+//
+// 형식이 어긋나면 조건을 버리지 않고 " and 1=0" 으로 바꾼다(fail-closed). 조건을 그냥 빼면
+// 소유자 필터 같은 조건이 사라져 오히려 더 많은 행이 조회·수정·삭제될 수 있기 때문이다.
+func WhereClause(prefix string, item Where, pos *int) (string, []interface{}) {
+	compare := strings.ToLower(strings.TrimSpace(item.Compare))
+	if !ValidColumn(item.Column) || !whereCompares[compare] {
+		log.Warn().Str("column", item.Column).Str("compare", item.Compare).Msg("rejected invalid where")
+		return " and 1=0", nil
+	}
+
+	column := item.Column
+	if !strings.Contains(column, "_") {
+		column = prefix + column
+	}
+
+	switch compare {
+	case "in", "not in":
+		values := whereValues(item.Value)
+		if len(values) == 0 {
+			// 예전 코드는 빈 목록에서 "in ()" 문법 오류로 아무 행도 돌려주지/바꾸지 않았다. 같은 결과를 유지한다.
+			return " and 1=0", nil
+		}
+		marks := make([]string, len(values))
+		for i := range values {
+			marks[i] = wherePlaceholder(pos)
+		}
+		return " and " + column + " " + compare + " (" + strings.Join(marks, ", ") + ")", values
+	case "between":
+		values := whereValues(item.Value)
+		if _, isString := item.Value.(string); isString || len(values) != 2 {
+			log.Warn().Str("column", item.Column).Msg("rejected invalid between value")
+			return " and 1=0", nil
+		}
+		from := wherePlaceholder(pos)
+		to := wherePlaceholder(pos)
+		return " and " + column + " between " + from + " and " + to, values
+	case "like":
+		// 예전 규칙과 같이 like 만 양쪽에 % 를 붙인다(not like 는 값 그대로).
+		value := item.Value
+		if s, ok := value.(string); ok {
+			value = "%" + s + "%"
+		}
+		return " and " + column + " " + compare + " " + wherePlaceholder(pos), []interface{}{value}
+	default:
+		return " and " + column + " " + compare + " " + wherePlaceholder(pos), []interface{}{item.Value}
+	}
 }
