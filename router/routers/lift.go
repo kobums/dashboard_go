@@ -36,6 +36,14 @@ func SetupLiftRoutes(group fiber.Router) {
 		return c.JSON(controller.Result)
 	})
 
+	group.Get("/lift/daily", func(c *fiber.Ctx) error {
+		var controller rest.LiftController
+		controller.Init(c)
+		controller.Daily()
+		controller.Close()
+		return c.JSON(controller.Result)
+	})
+
 	group.Post("/lift/sync", func(c *fiber.Ctx) error {
 		var controller rest.LiftController
 		controller.Init(c)

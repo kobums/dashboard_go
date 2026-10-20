@@ -1,9 +1,10 @@
 package rest
 
-// 운동 통계 — 같은 요일 비교(/api/fitness/compare)와 연도별 통계(/api/fitness/yearly).
+// 운동 통계 — 연도별 통계(/api/fitness/yearly)와 일별 잔디(/api/fitness/daily).
 // 수기 작성 파일: buildtool-model 재생성에 덮이지 않는다.
 
 import (
+	"sort"
 	"time"
 
 	"dashboard/controllers"
@@ -103,4 +104,63 @@ func (c *FitnessController) Yearly() {
 	}
 
 	c.Set("years", list)
+}
+
+type fitnessDay struct {
+	Date     string `json:"date"`
+	Minutes  int    `json:"minutes"`
+	Count    int    `json:"count"`
+	Calories int    `json:"calories"`
+	Types    string `json:"types"` // 콤마 구분 (workout_tb w_type)
+	Lift     bool   `json:"lift"`  // 노션 운동 캘린더에 기록된 날 (Apple 운동 없이 웨이트만 한 날도 잔디에 잡히도록)
+}
+
+// Daily 는 전체 기간 일별 운동 — workout_tb(Apple·수기) 합계 + 노션 웨이트 기록일. 운동 잔디용.
+func (c *FitnessController) Daily() {
+	conn := c.NewConnection()
+
+	byDate := map[string]*fitnessDay{}
+	get := func(date string) *fitnessDay {
+		if _, ok := byDate[date]; !ok {
+			byDate[date] = &fitnessDay{Date: date}
+		}
+		return byDate[date]
+	}
+
+	rows, err := conn.Query("SELECT w_workoutdate, COUNT(*), COALESCE(SUM(w_duration),0), COALESCE(SUM(w_calories),0), COALESCE(GROUP_CONCAT(DISTINCT w_type),'') " +
+		"FROM workout_tb GROUP BY w_workoutdate")
+	if err != nil {
+		log.Error().Msg(err.Error())
+		c.Error(err)
+		return
+	}
+	for rows.Next() {
+		var date, types string
+		var cnt, dur, cal int
+		if rows.Scan(&date, &cnt, &dur, &cal, &types) != nil || len(date) < 10 {
+			continue
+		}
+		d := get(date[:10])
+		d.Count, d.Minutes, d.Calories, d.Types = cnt, dur/60, cal, types
+	}
+	rows.Close()
+
+	if rows, err := conn.Query("SELECT DISTINCT ld_date FROM liftday_tb"); err == nil {
+		for rows.Next() {
+			var date string
+			if rows.Scan(&date) == nil && len(date) >= 10 {
+				get(date[:10]).Lift = true
+			}
+		}
+		rows.Close()
+	} else {
+		log.Error().Msg(err.Error())
+	}
+
+	items := make([]fitnessDay, 0, len(byDate))
+	for _, d := range byDate {
+		items = append(items, *d)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Date < items[j].Date })
+	c.Set("items", items)
 }
