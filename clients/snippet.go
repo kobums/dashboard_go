@@ -101,6 +101,7 @@ func snippetGet(path string) ([]byte, error) {
 }
 
 // FetchReadingDaily 는 전체 독서 세션을 일별로 집계한다: [{date, minutes, pages, sessions}]
+// pages 는 세션 페이지와 읽은 페이지 로그 중 큰 값 — 로그만 있는 날은 minutes·sessions 가 0 이다.
 func FetchReadingDaily() ([]byte, error) {
 	buf, err := snippetGet("/readingsessions")
 	if err != nil {
@@ -135,6 +136,20 @@ func FetchReadingDaily() ([]byte, error) {
 		byDay[day].Sessions++
 	}
 
+	// 타이머 없이 진행률만 올린 날도 반영 — 같은 날 세션·로그가 겹치면(세션 저장도 로그를 남김) 큰 쪽을 쓴다
+	logPages, err := fetchReadingLogPages()
+	if err != nil {
+		log.Error().Str("path", "/readinglogs/daily").Msg(err.Error())
+	}
+	for day, pages := range logPages {
+		if _, ok := byDay[day]; !ok {
+			byDay[day] = &dailyAgg{}
+		}
+		if pages > byDay[day].Pages {
+			byDay[day].Pages = pages
+		}
+	}
+
 	type dailyRow struct {
 		Date     string `json:"date"`
 		Minutes  int    `json:"minutes"`
@@ -152,6 +167,51 @@ func FetchReadingDaily() ([]byte, error) {
 		rows = append(rows, dailyRow{Date: d, Minutes: agg.Minutes, Pages: agg.Pages, Sessions: agg.Sessions})
 	}
 	return json.Marshal(rows)
+}
+
+// snippet 읽은 페이지 로그(readinglog_tb)가 쌓이기 시작한 달 — 이전 달은 조회해도 비어 있다.
+const readingLogSinceYear, readingLogSinceMonth = 2026, 10
+
+type readingLogDay struct {
+	Date  string `json:"date"`
+	Pages int    `json:"pages"`
+}
+
+// fetchReadingLogMonth 는 /readinglogs/daily 한 달치: 날짜(YYYY-MM-DD) → 그날 읽은 페이지.
+// snippet 이 (책, 날짜)별 순증가를 0 하한으로 합산해 주므로 오타 수정·재독으로 음수가 되지 않는다.
+func fetchReadingLogMonth(year int, month int) (map[string]int, error) {
+	buf, err := snippetGet(fmt.Sprintf("/readinglogs/daily?year=%v&month=%v", year, month))
+	if err != nil {
+		return nil, err
+	}
+	var days []readingLogDay
+	if err := json.Unmarshal(buf, &days); err != nil {
+		return nil, err
+	}
+	pages := map[string]int{}
+	for _, d := range days {
+		if len(d.Date) >= 10 {
+			pages[d.Date[:10]] += d.Pages
+		}
+	}
+	return pages, nil
+}
+
+// fetchReadingLogPages 는 readingLogSince ~ 이번 달 일별 읽은 페이지를 모은다.
+// 한 달이라도 실패하면 그때까지 모은 값과 에러를 함께 돌려준다 (세션 집계는 막지 않는다).
+func fetchReadingLogPages() (map[string]int, error) {
+	pages := map[string]int{}
+	now := time.Now()
+	for m := time.Date(readingLogSinceYear, time.Month(readingLogSinceMonth), 1, 0, 0, 0, 0, time.Local); !m.After(now); m = m.AddDate(0, 1, 0) {
+		month, err := fetchReadingLogMonth(m.Year(), int(m.Month()))
+		if err != nil {
+			return pages, err
+		}
+		for d, p := range month {
+			pages[d] += p
+		}
+	}
+	return pages, nil
 }
 
 // FetchReadingBooks 는 완독한 책 목록을 만든다 (연도 필터는 프론트에서).
