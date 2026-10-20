@@ -7,6 +7,9 @@ package rest
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +46,7 @@ type haeWorkout struct {
 	End                string      `json:"end"`
 	Duration           float64     `json:"duration"`
 	ActiveEnergyBurned haeQuantity `json:"activeEnergyBurned"`
+	ActiveEnergy       haeQuantity `json:"activeEnergy"` // 구버전(v1) 형식 — activeEnergyBurned 가 없을 때
 	Distance           haeQuantity `json:"distance"`
 }
 
@@ -63,6 +67,17 @@ var metricNameMap = map[string]string{
 	"apple_exercise_time": "exercise_minutes",
 	"weight_body_mass":    "weight",
 	"resting_heart_rate":  "resting_hr",
+}
+
+// 하루 누적 지표 — 한 번 보낸 데이터 안에 같은 날 점이 여러 개면(시간 단위 그룹핑·원본 샘플) 더해야 하루 값이 된다.
+// 그 외(체중·심박 등)는 그날 마지막 값을 쓴다.
+var cumulativeMetrics = map[string]bool{
+	"steps":                    true,
+	"active_energy":            true,
+	"exercise_minutes":         true,
+	"basal_energy_burned":      true,
+	"walking_running_distance": true,
+	"flights_climbed":          true,
 }
 
 // normalizeMetricName 은 알려진 이름은 정규화하고, 모르는 이름은 원본을 소문자로 반환한다.
@@ -116,22 +131,44 @@ func (c *HealthIngestController) ingestMetrics(conn *models.Connection, metrics 
 	count := 0
 	for _, metric := range metrics {
 		name := normalizeMetricName(metric.Name)
+		daily, unit := dailyMetricValues(name, metric)
 
-		for _, point := range metric.Data {
-			date := haeDate(point.Date)
-			if date == "" {
-				continue
-			}
-
-			if err := upsertMetric(conn, date, name, point.Qty, metric.Units); err != nil {
+		for date, qty := range daily {
+			if err := upsertMetric(conn, date, name, qty, unit); err != nil {
 				log.Error().Str("metric", name).Msg(err.Error())
 				continue
 			}
 			count++
 		}
+		log.Info().Str("metric", name).Int("points", len(metric.Data)).Int("days", len(daily)).Msg("health ingest metric")
 	}
 
 	return count
+}
+
+// dailyMetricValues 는 한 지표의 점들을 날짜별 하루 값으로 모은다.
+// 예전엔 점마다 upsert 해서 시간 단위로 보내면 하루 걸음이 「마지막 한 시간」 값으로 덮였다.
+func dailyMetricValues(name string, metric haeMetric) (map[string]float64, string) {
+	unit := metric.Units
+	scale := 1.0
+	if strings.EqualFold(unit, "kJ") {
+		scale, unit = 1/4.184, "kcal" // 에너지는 kcal 로 통일
+	}
+
+	daily := map[string]float64{}
+	for _, point := range metric.Data {
+		date := haeDate(point.Date)
+		if date == "" {
+			continue
+		}
+		qty := point.Qty * scale
+		if cumulativeMetrics[name] {
+			daily[date] += qty
+		} else {
+			daily[date] = qty
+		}
+	}
+	return daily, unit
 }
 
 // IngestShortcut 은 iOS 기본 단축어(Shortcuts)용 수신 엔드포인트다.
@@ -151,8 +188,12 @@ func (c *HealthIngestController) IngestShortcut(body []byte) {
 	}
 
 	date := time.Now().Format("2006-01-02")
-	if d, ok := raw["date"].(string); ok && len(d) >= 10 {
-		date = d[:10]
+	if d, ok := raw["date"].(string); ok && strings.TrimSpace(d) != "" {
+		if parsed, ok := parseShortcutDate(d); ok {
+			date = parsed
+		} else {
+			log.Error().Str("date", d).Msg("shortcut ingest: 날짜 형식을 읽지 못해 오늘로 저장")
+		}
 	}
 
 	conn := c.NewConnection()
@@ -162,11 +203,12 @@ func (c *HealthIngestController) IngestShortcut(body []byte) {
 		if key == "date" {
 			continue
 		}
-		qty, ok := toFloat(val)
+		name := normalizeMetricName(key)
+		qty, ok := shortcutValue(name, val)
 		if !ok || qty == 0 {
+			log.Info().Str("key", key).Str("value", truncate(fmt.Sprint(val), 100)).Msg("shortcut ingest: 값 없음/형식 오류로 건너뜀")
 			continue
 		}
-		name := normalizeMetricName(key)
 		if err := upsertMetric(conn, date, name, qty, ""); err != nil {
 			log.Error().Str("metric", name).Msg(err.Error())
 			continue
@@ -179,21 +221,77 @@ func (c *HealthIngestController) IngestShortcut(body []byte) {
 	c.Set("date", date)
 }
 
+var numberPattern = regexp.MustCompile(`-?\d+(\.\d+)?`)
+
 // toFloat 은 JSON 숫자(float64) 또는 숫자 문자열을 float64 로 변환한다.
-// 단축어가 "8,532" / "72.4 kg" 처럼 쉼표·단위 붙은 문자열을 보내는 경우도 처리한다.
+// 단축어가 "8,532" / "72.4 kg" / "72.4kg" / "8532 걸음" 처럼 쉼표·단위 붙은 문자열을 보내는 경우도 처리한다.
 func toFloat(v interface{}) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
 		return n, true
 	case string:
-		s := strings.ReplaceAll(strings.TrimSpace(n), ",", "")
-		if i := strings.IndexAny(s, " \t"); i > 0 {
-			s = s[:i] // "72.4 kg" → "72.4"
+		m := numberPattern.FindString(strings.ReplaceAll(n, ",", ""))
+		if m == "" {
+			return 0, false
 		}
-		f, err := strconv.ParseFloat(s, 64)
+		f, err := strconv.ParseFloat(m, 64)
 		return f, err == nil
 	}
 	return 0, false
+}
+
+// shortcutValue 는 단축어 값 하나를 하루 값으로 바꾼다.
+// 「건강 샘플 찾기」 결과를 그대로 넣으면 배열이나 줄바꿈으로 이어진 여러 값이 온다 —
+// 누적 지표(걸음 등)는 더하고, 나머지(체중 등)는 마지막 값을 쓴다.
+func shortcutValue(name string, v interface{}) (float64, bool) {
+	var parts []interface{}
+	switch n := v.(type) {
+	case []interface{}:
+		parts = n
+	case string:
+		for _, line := range strings.Split(strings.TrimSpace(n), "\n") {
+			if strings.TrimSpace(line) != "" {
+				parts = append(parts, line)
+			}
+		}
+	default:
+		parts = []interface{}{v}
+	}
+
+	total, found := 0.0, false
+	for _, p := range parts {
+		f, ok := toFloat(p)
+		if !ok {
+			continue
+		}
+		if cumulativeMetrics[name] {
+			total += f
+		} else {
+			total = f
+		}
+		found = true
+	}
+	return total, found
+}
+
+var datePattern = regexp.MustCompile(`(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})`)
+
+// parseShortcutDate 는 단축어가 보내는 날짜를 YYYY-MM-DD 로 바꾼다.
+// 한국어 지역 설정의 「2026. 10. 20.」「2026년 10월 20일 오후 9:00」 이나 ISO「2026-10-20T21:00:00+09:00」 모두 허용.
+// (예전엔 앞 10글자를 그대로 잘라 「2026. 10. 2」 같은 값이 저장됐다)
+func parseShortcutDate(s string) (string, bool) {
+	m := datePattern.FindStringSubmatch(s)
+	if m == nil {
+		return "", false
+	}
+	y, _ := strconv.Atoi(m[1])
+	mo, _ := strconv.Atoi(m[2])
+	d, _ := strconv.Atoi(m[3])
+	t := time.Date(y, time.Month(mo), d, 0, 0, 0, 0, time.Local)
+	if t.Year() != y || int(t.Month()) != mo || t.Day() != d {
+		return "", false // 2026-02-31 같은 잘못된 날짜
+	}
+	return t.Format("2006-01-02"), true
 }
 
 func (c *HealthIngestController) ingestWorkouts(conn *models.Connection, workouts []haeWorkout) int {
@@ -202,7 +300,11 @@ func (c *HealthIngestController) ingestWorkouts(conn *models.Connection, workout
 	count := 0
 	for _, workout := range workouts {
 		if workout.Id == "" {
-			continue
+			// 구버전 형식엔 id 가 없다 — 예전엔 통째로 버렸다. 시작 시각+종류로 멱등 키를 만든다.
+			if workout.Start == "" {
+				continue
+			}
+			workout.Id = "hae-" + workout.Start + "-" + workout.Name
 		}
 
 		exists := manager.Count([]interface{}{
@@ -227,14 +329,19 @@ func (c *HealthIngestController) ingestWorkouts(conn *models.Connection, workout
 			}
 		}
 
+		energy := workout.ActiveEnergyBurned
+		if energy.Qty == 0 {
+			energy = workout.ActiveEnergy
+		}
+
 		item := &models.Workout{
 			Type:        workoutType(workout.Name),
 			Title:       workout.Name,
 			Workoutdate: date,
 			Starttime:   start,
 			Duration:    duration,
-			Calories:    int(workout.ActiveEnergyBurned.Qty),
-			Distance:    models.Double(workout.Distance.Qty),
+			Calories:    int(math.Round(toKcal(energy))),
+			Distance:    models.Double(toKm(workout.Distance)),
 			Source:      "apple",
 			Externalid:  workout.Id,
 		}
@@ -265,7 +372,30 @@ func haeDateTime(value string) string {
 }
 
 func parseHaeTime(value string) (time.Time, error) {
-	return time.Parse("2006-01-02 15:04:05 -0700", value)
+	t, err := time.Parse("2006-01-02 15:04:05 -0700", value)
+	if err != nil {
+		return time.Parse(time.RFC3339, value)
+	}
+	return t, nil
+}
+
+// toKcal 은 kJ 로 온 에너지를 kcal 로 바꾼다 (기기 지역 설정에 따라 kJ 로 내보내는 경우).
+func toKcal(q haeQuantity) float64 {
+	if strings.EqualFold(q.Units, "kJ") {
+		return q.Qty / 4.184
+	}
+	return q.Qty
+}
+
+// toKm 은 거리를 km 로 맞춘다 (workout_tb 거리 단위).
+func toKm(q haeQuantity) float64 {
+	switch strings.ToLower(q.Units) {
+	case "m":
+		return q.Qty / 1000
+	case "mi":
+		return q.Qty * 1.609344
+	}
+	return q.Qty
 }
 
 func truncate(s string, n int) string {

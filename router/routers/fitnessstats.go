@@ -19,4 +19,12 @@ func SetupFitnessRoutes(group fiber.Router) {
 		return c.JSON(controller.Result)
 	})
 
+	group.Get("/fitness/daily", func(c *fiber.Ctx) error {
+		var controller rest.FitnessController
+		controller.Init(c)
+		controller.Daily()
+		controller.Close()
+		return c.JSON(controller.Result)
+	})
+
 }

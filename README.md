@@ -39,14 +39,16 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | Method | Path | 설명 |
 |---|---|---|
 | GET | `/api/ping` | 헬스체크 (인증 없음) |
-| POST | `/api/health/ingest` | Health Auto Export 형식 수신 — `api-key: <HEALTH_INGEST_TOKEN>` |
-| POST | `/api/health/shortcut` | **iOS 단축어용** 평평한 JSON `{date?, steps, weight, ...}` — `api-key` 헤더. 값 0/누락 스킵, `"72.4 kg"` 같은 문자열도 파싱, (date,name) upsert 멱등 |
+| POST | `/api/health/ingest` | Health Auto Export 형식 수신 — `api-key: <HEALTH_INGEST_TOKEN>`. 누적 지표(걸음·활동 에너지·운동 시간 등)는 같은 날 점들을 합산(시간 단위 그룹핑 대응), kJ→kcal·m/mi→km 변환, id 없는 구버전 운동은 시작시각+이름으로 멱등 |
+| POST | `/api/health/shortcut` | **iOS 단축어용** 평평한 JSON `{date?, steps, weight, ...}` — `api-key` 헤더. 값 0/누락 스킵, `"72.4 kg"` 같은 문자열도 파싱, 여러 값(배열·줄바꿈)은 누적 지표면 합·아니면 마지막 값, 날짜는 `2026. 10. 20.`·`2026년 10월 20일` 같은 한국어 형식도 허용, (date,name) upsert 멱등 |
 | GET | `/api/health/metrics?from=&to=&name=` | 일별 지표 시계열 |
 | CRUD | `/api/workout(/:id)` | 운동 기록 (생성 CRUD, `startworkoutdate`/`endworkoutdate` 필터) |
 | GET | `/api/compare?date=` | **통합 같은 요일 비교** (운동·독서·개발 공용) — 기준일/전날/−7d/−28d/−364d(52주). 지표: steps·activeEnergy·exerciseMinutes·workout(분·건수)·devCommits·readingMinutes·readingPages. 기준일 데이터 전무하면 어제 폴백. null=데이터 없음, 0과 구분. 응답은 기준일별 5분 메모이즈(stale 반환+백그라운드 갱신) |
 | GET | `/api/fitness/yearly` | 연도별 운동: 세션·시간·거리·칼로리·타입별·월별 + 연평균 걸음 |
+| GET | `/api/fitness/daily` | 전체 기간 일별 운동 `[{date, minutes, count, calories, types, lift}]` — workout_tb 합계 + 노션 웨이트 기록일(`lift`). 운동 잔디용 |
 | GET | `/api/lift/overview` | 웨이트 요약 — 종목별(e1RM·볼륨·증감·최고·다음 목표·달성), 유산소, 최근 12주 부위별 세트/볼륨·4분할, PR, 형식 오류, 체중 180일, 동기화 상태 |
 | GET | `/api/lift/exercise?name=` | 종목 회차별 상세 (웜업/본세트 세트, e1RM, 볼륨, 목표→달성, PR) |
+| GET | `/api/lift/daily` | 전체 기간 일별 웨이트 `[{date, sets, volume, exercises, parts}]` — 본세트 수·중량 볼륨(맨몸 제외)·종목 수·부위. 웨이트 잔디용 |
 | GET | `/api/lift/calendar?month=YYYY-MM` | 월 전체 날짜 — 노션 운동일·종목 + Apple 운동(workout_tb)·걸음·체중 날짜 조인 |
 | POST | `/api/lift/sync` | 노션 전체 재동기화 즉시 실행 |
 | GET | `/api/lift/form?date=` | 입력 시트 컨텍스트 — 그날 기록, 종목 목록(노션 select 옵션 + 지난 기록·목표), 4분할 추천 부위 |

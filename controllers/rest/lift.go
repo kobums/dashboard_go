@@ -759,3 +759,88 @@ func (c *LiftController) SetDay(date, condition string) {
 		c.Error(err)
 	}
 }
+
+type liftDailyRow struct {
+	Date      string   `json:"date"`
+	Sets      int      `json:"sets"`      // 본세트 수 (웜업 제외)
+	Volume    float64  `json:"volume"`    // 중량 본세트 kg×회 합 (맨몸 제외)
+	Exercises int      `json:"exercises"` // 종목 수 (유산소 포함)
+	Parts     []string `json:"parts"`
+}
+
+// Daily 는 전체 기간 일별 웨이트 — 웨이트 잔디용. 노션 캘린더만 있고 종목이 없는 날도 포함한다.
+func (c *LiftController) Daily() {
+	conn := c.NewConnection()
+
+	byDate := map[string]*liftDailyRow{}
+	get := func(date string) *liftDailyRow {
+		if _, ok := byDate[date]; !ok {
+			byDate[date] = &liftDailyRow{Date: date, Parts: []string{}}
+		}
+		return byDate[date]
+	}
+	addPart := func(d *liftDailyRow, part string) {
+		part = strings.TrimSpace(part)
+		if part != "" && !containsStr(d.Parts, part) {
+			d.Parts = append(d.Parts, part)
+		}
+	}
+
+	rows, err := conn.Query("SELECT ld_date, ld_parts FROM liftday_tb")
+	if err != nil {
+		log.Error().Msg(err.Error())
+		c.Error(err)
+		return
+	}
+	for rows.Next() {
+		var date, parts string
+		if rows.Scan(&date, &parts) != nil || len(date) < 10 {
+			continue
+		}
+		d := get(date[:10])
+		for _, p := range strings.Split(parts, ",") {
+			addPart(d, p)
+		}
+	}
+	rows.Close()
+
+	if rows, err := conn.Query("SELECT le_date, le_part, COUNT(*) FROM liftexercise_tb GROUP BY le_date, le_part"); err == nil {
+		for rows.Next() {
+			var date, part string
+			var cnt int
+			if rows.Scan(&date, &part, &cnt) != nil || len(date) < 10 {
+				continue
+			}
+			d := get(date[:10])
+			d.Exercises += cnt
+			addPart(d, part)
+		}
+		rows.Close()
+	} else {
+		log.Error().Msg(err.Error())
+	}
+
+	if rows, err := conn.Query("SELECT ls_date, COUNT(*), COALESCE(SUM(CASE WHEN ls_bodyweight = 0 THEN ls_weight * ls_reps ELSE 0 END),0) " +
+		"FROM liftset_tb WHERE ls_warmup = 0 GROUP BY ls_date"); err == nil {
+		for rows.Next() {
+			var date string
+			var sets int
+			var volume float64
+			if rows.Scan(&date, &sets, &volume) != nil || len(date) < 10 {
+				continue
+			}
+			d := get(date[:10])
+			d.Sets, d.Volume = sets, round1(volume)
+		}
+		rows.Close()
+	} else {
+		log.Error().Msg(err.Error())
+	}
+
+	items := make([]liftDailyRow, 0, len(byDate))
+	for _, d := range byDate {
+		items = append(items, *d)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Date < items[j].Date })
+	c.Set("items", items)
+}
