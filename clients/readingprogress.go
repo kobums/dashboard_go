@@ -133,14 +133,23 @@ func SnapshotReadingProgress() error {
 
 // ReadingActivity 는 기준일(date)에 독서 세션 외 활동을 계산한다.
 //
-//	pages    : 직전 스냅샷 대비 readPage 증가분 합 (직전 스냅샷이 없으면 0 — 비교 불가)
+//	pages    : snippet 읽은 페이지 로그(/readinglogs/daily)의 그날 값.
+//	           로그 API 를 못 쓰면(구버전 snippet 등) 직전 스냅샷 대비 readPage 증가분 합으로 대신한다.
 //	finished : 그날 완독 처리한 책 제목
 func ReadingActivity(date string) (pages int, finished []string, err error) {
 	books, snaps, err := recentReadingSnapshot()
 	if err != nil {
 		return 0, nil, err
 	}
-	return progressPages(snaps, date), finishedOn(books, date), nil
+	pages = progressPages(snaps, date)
+	if t, perr := time.ParseInLocation("2006-01-02", date, time.Local); perr == nil {
+		if logs, lerr := fetchReadingLogMonth(t.Year(), int(t.Month())); lerr == nil {
+			pages = logs[date]
+		} else {
+			log.Error().Str("reading", "readinglogs").Msg(lerr.Error())
+		}
+	}
+	return pages, finishedOn(books, date), nil
 }
 
 // finishedOn 은 date 에 완독 처리한 책 제목 (snippet 은 상태 변경 시 endDate 를 찍는다).

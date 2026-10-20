@@ -59,7 +59,7 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 | POST | `/api/diet/log` · `/diet/log/delete` · `/diet/copy` | 음식 추가·수정·삭제·다른 날(끼니) 복사 → 노션 「식단 기록」 그날 페이지 표에 직접 쓰고 합계 재계산 후 동기화 (보정 행 `페이지#순번` 은 거부) |
 | GET/POST | `/api/diet/targets` | 운동일/휴식일 목표 매크로 + BMR (`fetchcache_tb` diet_targets) |
 | GET | `/api/reading/summary?year=&month=` | snippetapi 프록시 집계 (10분 캐시) |
-| GET | `/api/reading/daily` | 독서 세션 일별 집계 `[{date, minutes, pages, sessions}]` (10분 캐시) — 잔디·일별/주별 차트용 |
+| GET | `/api/reading/daily` | 독서 일별 집계 `[{date, minutes, pages, sessions}]` (10분 캐시) — 잔디·일별/주별 차트용. pages 는 세션 페이지와 snippet 읽은 페이지 로그(`/readinglogs/daily`) 중 큰 값이라 타이머 없이 진행률만 올린 날도 잡힌다 |
 | GET | `/api/reading/books` | 완독 책 목록 `[{title, author, coverUrl, rating, endDate}]` (10분 캐시) — 연도별 표지 그리드용 |
 | GET | `/api/dev/summary?days=` | 병합 히트맵+통계. `days=0`(기본): **전체 기간**(백필 포함), 1~400: 해당 일수. 60분 캐시 |
 | GET | `/api/dev/recent` | GitHub+GitLab 최근 활동 병합 상위 20 (60분 캐시) |
