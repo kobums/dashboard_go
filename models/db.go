@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"dashboard/global/config"
 	"dashboard/global/log"
+	"regexp"
 
 	"database/sql"
 	"time"
@@ -60,7 +61,16 @@ func Paging(page int, pagesize int) PagingType {
 	return PagingType{Page: page, Pagesize: pagesize}
 }
 
+// orderingPattern 은 ORDER BY 절로 허용하는 형식이다: 콤마로 구분된
+// "컬럼명 [asc|desc]" 목록 또는 rand(). 클라이언트의 orderby 쿼리 파라미터가
+// 그대로 SQL 에 이어붙여지므로, 이 형식이 아니면 버려서 SQL 인젝션을 막는다.
+var orderingPattern = regexp.MustCompile(`(?i)^\s*(rand\(\)|[a-z_][a-z0-9_.]*(\s+(asc|desc))?)(\s*,\s*[a-z_][a-z0-9_.]*(\s+(asc|desc))?)*\s*$`)
+
 func Ordering(order string) OrderingType {
+	if order != "" && !orderingPattern.MatchString(order) {
+		log.Warn().Str("orderby", order).Msg("rejected invalid orderby")
+		return OrderingType{Order: ""}
+	}
 	return OrderingType{Order: order}
 }
 
