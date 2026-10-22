@@ -97,10 +97,10 @@ func queryWorkoutMinutes(conn *models.Connection, dates []string) (minutes []flo
 	return minutes, counts
 }
 
-// queryDevByDates 는 5분 캐시된 dev summary(전체 기간)에서 날짜별 커밋 수를 뽑는다.
+// queryDevByDates 는 dev summary(5분 안이면 캐시, 지났으면 새로 받음)(전체 기간)에서 날짜별 커밋 수를 뽑는다.
 func queryDevByDates(dates []string) []float64 {
 	values := make([]float64, len(dates))
-	buf, err := clients.GetCached("dev_summary_0", 5*time.Minute, func() ([]byte, error) {
+	buf, err := clients.GetFresh("dev_summary_0", 5*time.Minute, func() ([]byte, error) {
 		return clients.FetchDevSummary(0)
 	})
 	if err != nil {
@@ -132,7 +132,7 @@ func queryDevByDates(dates []string) []float64 {
 func checkReadingDone(baseDate string) bool {
 	now := time.Now()
 	key := fmt.Sprintf("reading_summary_%v_%v", now.Year(), int(now.Month()))
-	buf, err := clients.GetCached(key, 10*time.Minute, func() ([]byte, error) {
+	buf, err := clients.GetFresh(key, 10*time.Minute, func() ([]byte, error) {
 		return clients.FetchReadingSummary(now.Year(), int(now.Month()))
 	})
 	if err != nil {
@@ -153,12 +153,12 @@ func checkReadingDone(baseDate string) bool {
 	return last >= baseDate
 }
 
-// queryReadingByDates 는 10분 캐시된 reading daily 에서 날짜별 독서 분·페이지를 뽑는다.
+// queryReadingByDates 는 reading daily(10분 안이면 캐시, 지났으면 새로 받음) 에서 날짜별 독서 분·페이지를 뽑는다.
 // 세션 없는 날 = 안 읽은 날 = 0 (유효한 값).
 func queryReadingByDates(dates []string) (minutes []float64, pages []float64) {
 	minutes = make([]float64, len(dates))
 	pages = make([]float64, len(dates))
-	buf, err := clients.GetCached("reading_daily", 10*time.Minute, clients.FetchReadingDaily)
+	buf, err := clients.GetFresh("reading_daily", 10*time.Minute, clients.FetchReadingDaily)
 	if err != nil {
 		log.Error().Msg(err.Error())
 		return minutes, pages

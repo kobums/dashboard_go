@@ -60,6 +60,32 @@ func GetCached(key string, ttl time.Duration, fetch func() ([]byte, error)) ([]b
 	return buf, nil
 }
 
+// GetFresh 는 TTL 이 지났으면 기다려서 새로 받는다 (stale 반환 안 함) — 알림·비교처럼 「지금 값」이 필요한 곳용.
+// GetCached 의 stale 반환은 아무도 화면을 안 열면 옛 값(예: 아침 기준 커밋 0회)이 그대로 쓰인다.
+// 새로 받기에 실패하면 남아 있는 캐시로 대신한다.
+func GetFresh(key string, ttl time.Duration, fetch func() ([]byte, error)) ([]byte, error) {
+	if v, ok := memCache.Load(key); ok {
+		entry := v.(memEntry)
+		if time.Since(entry.fetchedAt) < ttl {
+			return entry.payload, nil
+		}
+	}
+	buf, err := fetch()
+	if err == nil {
+		saveCache(key, buf)
+		return buf, nil
+	}
+	log.Error().Str("cache", key).Msg(err.Error())
+
+	conn := models.NewConnection()
+	defer conn.Close()
+	item := models.NewFetchcacheManager(conn).GetWhere([]interface{}{models.Where{Column: "cachekey", Value: key, Compare: "="}})
+	if item == nil {
+		return nil, err
+	}
+	return []byte(item.Payload), nil
+}
+
 func refreshCache(key string, fetch func() ([]byte, error)) {
 	if _, loaded := refreshing.LoadOrStore(key, true); loaded {
 		return
