@@ -56,25 +56,24 @@ func FetchDevSummary(days int) ([]byte, error) {
 
 	// 외부 fetch — github/gitlab 병렬 (토큰 없으면 각각 빈 결과)
 	var ghDays, glDays []DayCount
+	var ghErr, glErr error
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		t0 := time.Now()
-		var err error
-		ghDays, err = FetchGithubCalendar(fetchFrom, to)
-		if err != nil {
-			log.Error().Str("source", "github").Msg(err.Error())
+		ghDays, ghErr = FetchGithubCalendar(fetchFrom, to)
+		if ghErr != nil {
+			log.Error().Str("source", "github").Msg(ghErr.Error())
 		}
 		log.Info().Str("source", "github").Str("elapsed", time.Since(t0).String()).Int("days", len(ghDays)).Msg("dev fetch")
 	}()
 	go func() {
 		defer wg.Done()
 		t0 := time.Now()
-		var err error
-		glDays, err = FetchGitlabCalendar(fetchFrom, to)
-		if err != nil {
-			log.Error().Str("source", "gitlab").Msg(err.Error())
+		glDays, glErr = FetchGitlabCalendar(fetchFrom, to)
+		if glErr != nil {
+			log.Error().Str("source", "gitlab").Msg(glErr.Error())
 		}
 		log.Info().Str("source", "gitlab").Str("elapsed", time.Since(t0).String()).Int("days", len(glDays)).Msg("dev fetch")
 	}()
@@ -141,6 +140,15 @@ func FetchDevSummary(days int) ([]byte, error) {
 
 	current, max := computeStreak(calendar)
 
+	// 이번 갱신에 실패한 소스 (토큰 만료 등) — 최근 날짜 값은 마지막 저장분이라 실제보다 적을 수 있다
+	failed := []string{}
+	if ghErr != nil {
+		failed = append(failed, "github")
+	}
+	if glErr != nil {
+		failed = append(failed, "gitlab")
+	}
+
 	summary := map[string]interface{}{
 		"days":     days,
 		"from":     fromStr,
@@ -154,6 +162,7 @@ func FetchDevSummary(days int) ([]byte, error) {
 		"week":   sumWindow(calendar, 7),
 		"month":  sumWindow(calendar, 30),
 		"streak": map[string]int{"current": current, "max": max},
+		"failed": failed,
 	}
 	return json.Marshal(summary)
 }

@@ -113,8 +113,15 @@ func queryDevByDates(dates []string) []float64 {
 			Date  string `json:"date"`
 			Total int    `json:"total"`
 		} `json:"calendar"`
+		Failed []string `json:"failed"`
 	}
 	if err := json.Unmarshal(buf, &parsed); err != nil {
+		values[0] = -1
+		return values
+	}
+	if len(parsed.Failed) > 0 {
+		// GitHub/GitLab 갱신 실패(토큰 만료 등) — 기준일 값은 갱신 안 된 0 일 수 있어 판정 불가로 둔다
+		log.Error().Strs("failed", parsed.Failed).Msg("dev summary 갱신 실패 — 커밋 판정 제외")
 		values[0] = -1
 		return values
 	}
