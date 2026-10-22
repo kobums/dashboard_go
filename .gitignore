@@ -7,3 +7,11 @@ config/model.json
 nohup.out
 .env
 .claude/
+
+# 환경변수·키·인증서 (실수 커밋 방지)
+.env.local
+.env.production
+*.pem
+*.key
+*.p12
+credentials.json
