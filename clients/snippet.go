@@ -1,8 +1,10 @@
 package clients
 
 // snippetapi.gowoobro.com 프록시 클라이언트.
-// SNIPPET_EMAIL/PASSWORD 로 로그인해 JWT 를 메모리에 캐시하고, 401 이면 재로그인한다.
-// (refresh 토큰은 쓰지 않는다 — 싱글 유저라 재로그인이 더 단순하다)
+// SNIPPET_EMAIL/PASSWORD 로 로그인해 토큰을 메모리에 캐시한다. access 토큰(1시간)이 만료돼 401 이 나면
+// refresh 토큰(30일, 쓸 때마다 연장)으로 새 access 토큰을 받고, refresh 가 거부될 때만 재로그인한다.
+// (예전엔 401 마다 재로그인했는데, snippet 은 로그인마다 refreshtoken_tb 에 기기 세션 행을 새로 만들어
+// 시간당 1행씩 쌓였다 — 2026-10 기준 이 계정만 수백 행)
 
 import (
 	"bytes"
@@ -20,50 +22,127 @@ import (
 
 var snippetClient = &http.Client{Timeout: 15 * time.Second}
 
-var snippetToken string
-var snippetMutex sync.Mutex
+// 인증 상태 — 전부 snippetMutex 로 보호한다 (독서 스냅샷 goroutine 과 API 핸들러가 동시에 부른다).
+var (
+	snippetMutex        sync.Mutex
+	snippetToken        string // access 토큰 (JWT, 1시간)
+	snippetRefreshToken string // refresh 토큰 (불투명 문자열, 30일 sliding)
+)
 
 type snippetAuthResponse struct {
-	Token string `json:"token"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refreshToken"`
 }
 
-func snippetLogin() error {
-	snippetMutex.Lock()
-	defer snippetMutex.Unlock()
+// snippetPostAuth 는 /auth/login·/auth/refresh 공용 — 200 이 아니면 상태 코드만 돌려준다.
+func snippetPostAuth(path string, payload map[string]string) (int, snippetAuthResponse, error) {
+	var auth snippetAuthResponse
+	body, _ := json.Marshal(payload)
 
-	body, _ := json.Marshal(map[string]string{
-		"email":    config.SnippetEmail,
-		"password": config.SnippetPassword,
-	})
-
-	res, err := snippetClient.Post(config.SnippetApiUrl+"/auth/login", "application/json", bytes.NewReader(body))
+	res, err := snippetClient.Post(config.SnippetApiUrl+path, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, auth, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("snippet login failed: status %v", res.StatusCode)
+		io.Copy(io.Discard, res.Body)
+		return res.StatusCode, auth, nil
 	}
-
-	var auth snippetAuthResponse
 	if err := json.NewDecoder(res.Body).Decode(&auth); err != nil {
-		return err
+		return res.StatusCode, auth, err
 	}
 	if auth.Token == "" {
-		return fmt.Errorf("snippet login: empty token")
+		return res.StatusCode, auth, fmt.Errorf("snippet %v: empty token", path)
+	}
+	return res.StatusCode, auth, nil
+}
+
+// snippetLoginLocked 는 이메일/비밀번호로 로그인한다. snippetMutex 를 잡은 채로 호출할 것.
+func snippetLoginLocked() error {
+	status, auth, err := snippetPostAuth("/auth/login", map[string]string{
+		"email":    config.SnippetEmail,
+		"password": config.SnippetPassword,
+	})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("snippet login failed: status %v", status)
 	}
 
 	snippetToken = auth.Token
+	snippetRefreshToken = auth.RefreshToken
 	return nil
 }
 
-// snippetGet 은 인증 GET 요청을 보내고, 401 이면 한 번 재로그인 후 재시도한다.
-func snippetGet(path string) ([]byte, error) {
+// snippetRefreshLocked 는 refresh 토큰으로 access 토큰을 다시 받는다. snippetMutex 를 잡은 채로 호출할 것.
+// rejected=true 는 서버가 refresh 토큰 자체를 거부한 경우(만료·삭제 — 400/401/403)라 재로그인해야 한다.
+// 네트워크 오류·5xx 는 에러만 돌려준다 — 같은 서버라 곧바로 로그인해도 소용없고 세션 행만 늘린다.
+func snippetRefreshLocked() (rejected bool, err error) {
+	status, auth, err := snippetPostAuth("/auth/refresh", map[string]string{"refreshToken": snippetRefreshToken})
+	if err != nil {
+		return false, err
+	}
+	switch status {
+	case http.StatusOK:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		snippetRefreshToken = ""
+		return true, fmt.Errorf("snippet refresh rejected: status %v", status)
+	default:
+		return false, fmt.Errorf("snippet refresh failed: status %v", status)
+	}
+
+	snippetToken = auth.Token
+	if auth.RefreshToken != "" {
+		snippetRefreshToken = auth.RefreshToken
+	}
+	return false, nil
+}
+
+// snippetCurrentToken 은 캐시된 access 토큰을 돌려준다 (없으면 로그인).
+func snippetCurrentToken() (string, error) {
+	snippetMutex.Lock()
+	defer snippetMutex.Unlock()
+
 	if snippetToken == "" {
-		if err := snippetLogin(); err != nil {
-			return nil, err
+		if err := snippetLoginLocked(); err != nil {
+			return "", err
 		}
+	}
+	return snippetToken, nil
+}
+
+// snippetRenew 는 401 을 받은 토큰(stale)을 새 토큰으로 바꾼다 — refresh 를 먼저 쓰고, 거부될 때만 재로그인.
+// 여러 요청이 동시에 401 을 받아도 갱신은 한 번만 한다: 먼저 끝난 쪽이 바꿔 둔 토큰을 나머지가 쓴다.
+func snippetRenew(stale string) (string, error) {
+	snippetMutex.Lock()
+	defer snippetMutex.Unlock()
+
+	if snippetToken != "" && snippetToken != stale {
+		return snippetToken, nil
+	}
+	if snippetRefreshToken != "" {
+		rejected, err := snippetRefreshLocked()
+		if err == nil {
+			return snippetToken, nil
+		}
+		if !rejected {
+			return "", err
+		}
+		log.Info().Msg(err.Error() + " — 재로그인")
+	}
+	if err := snippetLoginLocked(); err != nil {
+		return "", err
+	}
+	return snippetToken, nil
+}
+
+// snippetGet 은 인증 GET 요청을 보내고, 401 이면 토큰을 한 번 갱신한 뒤 재시도한다.
+func snippetGet(path string) ([]byte, error) {
+	token, err := snippetCurrentToken()
+	if err != nil {
+		return nil, err
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
@@ -71,7 +150,7 @@ func snippetGet(path string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+snippetToken)
+		req.Header.Set("Authorization", "Bearer "+token)
 
 		res, err := snippetClient.Do(req)
 		if err != nil {
@@ -85,7 +164,7 @@ func snippetGet(path string) ([]byte, error) {
 		}
 
 		if res.StatusCode == http.StatusUnauthorized && attempt == 0 {
-			if err := snippetLogin(); err != nil {
+			if token, err = snippetRenew(token); err != nil {
 				return nil, err
 			}
 			continue
