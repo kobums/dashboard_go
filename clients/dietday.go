@@ -133,21 +133,23 @@ func buildDietDayRows(pageId, date string, items []dietDayItem, mealTexts map[st
 	}
 
 	sum := Macros{}
-	if len(items) > 0 {
-		for _, it := range items {
-			m := Macros{Kcal: it.kcal, Protein: it.protein, Carbs: it.carbs, Fat: it.fat}
-			add(it.meal, it.food, "", m)
-			if it.rowId != "" {
-				rows[len(rows)-1].notionId = dietDayRowPrefix + it.rowId
-			}
-			rows[len(rows)-1].grams = it.grams
-			sum = sum.Add(m)
+	tabled := map[string]bool{}
+	for _, it := range items {
+		m := Macros{Kcal: it.kcal, Protein: it.protein, Carbs: it.carbs, Fat: it.fat}
+		add(it.meal, it.food, "", m)
+		if it.rowId != "" {
+			rows[len(rows)-1].notionId = dietDayRowPrefix + it.rowId
 		}
-	} else {
-		for _, meal := range DietMeals {
-			if t := strings.TrimSpace(mealTexts[meal]); t != "" {
-				add(meal, t, "", Macros{})
-			}
+		rows[len(rows)-1].grams = it.grams
+		sum = sum.Add(m)
+		tabled[it.meal] = true
+	}
+	// 표에 행이 없고 끼니 텍스트 속성에만 적은 끼니 (「점심: 카레덮밥, 닭다리 …」) → 텍스트 그대로 1행
+	textOnly := []int{}
+	for _, meal := range DietMeals {
+		if t := strings.TrimSpace(mealTexts[meal]); t != "" && !tabled[meal] {
+			add(meal, t, "", Macros{})
+			textOnly = append(textOnly, len(rows)-1)
 		}
 	}
 
@@ -156,6 +158,12 @@ func buildDietDayRows(pageId, date string, items []dietDayItem, mealTexts map[st
 	diff := Macros{Kcal: total.Kcal - sum.Kcal, Protein: total.Protein - sum.Protein, Carbs: total.Carbs - sum.Carbs, Fat: total.Fat - sum.Fat}
 	off := func(t, d float64) bool { return t > 0 && math.Abs(d) >= 1 }
 	if off(total.Kcal, diff.Kcal) || off(total.Protein, diff.Protein) || off(total.Carbs, diff.Carbs) || off(total.Fat, diff.Fat) {
+		// 텍스트로만 적은 끼니가 하나뿐이면 남는 양은 그 끼니 몫 — 간식 보정 행 대신 그 행에 싣는다
+		if len(textOnly) == 1 && diff.Kcal > 0 {
+			rows[textOnly[0]].macros = diff.Round()
+			rows[textOnly[0]].memo = "끼니 텍스트로만 적은 끼니 — 하루 합계에서 표에 적힌 음식을 뺀 값"
+			return rows
+		}
 		add("간식", dietDayAdjustFood, "노션 식단 기록의 하루 합계에 맞춘 차이 (표에 없는 음식·정정분, 표에 없는 탄수화물·지방)", diff.Round())
 	}
 	return rows

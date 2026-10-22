@@ -51,6 +51,17 @@ func TestBuildDietDayRows(t *testing.T) {
 	if len(rows) != 3 || rows[0].meal != "아침" || rows[1].meal != "저녁" || rows[2].macros.Kcal != 1000 {
 		t.Errorf("fallback: %+v", rows)
 	}
+	// 표엔 아침만, 점심은 텍스트 속성에만 → 남는 양이 점심 행으로 (간식 보정 행 없음)
+	morning := []dietDayItem{{meal: "아침", food: "계란 3개", kcal: 230, protein: 18, carbs: 1, fat: 14}, {meal: "아침", food: "바나나", kcal: 100, protein: 1, carbs: 27, fat: 0}}
+	rows = buildDietDayRows("p", "d", morning, map[string]string{"아침": "계란 3개, 바나나", "점심": "카레덮밥, 닭다리"}, Macros{Kcal: 1355, Protein: 76, Carbs: 142, Fat: 51})
+	if len(rows) != 3 || rows[2].meal != "점심" || rows[2].food != "카레덮밥, 닭다리" || rows[2].macros != (Macros{Kcal: 1025, Protein: 57, Carbs: 114, Fat: 37}) {
+		t.Errorf("text-only meal: %+v", rows)
+	}
+	// 텍스트로만 적은 끼니가 둘이면 나눌 근거가 없어 간식 보정 행
+	rows = buildDietDayRows("p", "d", morning, map[string]string{"점심": "카레", "저녁": "족발"}, Macros{Kcal: 1355, Protein: 76})
+	if len(rows) != 5 || rows[2].meal != "점심" || rows[3].meal != "저녁" || rows[4].food != dietDayAdjustFood {
+		t.Errorf("two text-only meals: %+v", rows)
+	}
 }
 
 func TestDietDayColumns(t *testing.T) {
