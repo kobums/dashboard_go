@@ -38,7 +38,9 @@ func NewSignupsSince(since map[string]string) ([]NewSignup, map[string]string) {
 		// 미래 시각 행(잘못 들어간 데이터)이 워터마크를 막지 않게 now 이하만 본다
 		err := conn.Conn.QueryRow(
 			"SELECT COALESCE(SUM("+col+" > ?), 0), COALESCE(SUM("+col+" >= ?), 0), "+
-				"DATE_FORMAT(MAX("+col+"), '%Y-%m-%d %H:%i:%s') FROM "+s.Table+" WHERE "+col+" <= ?",
+				// 워터마크는 마이크로초까지 — 초 단위로 자르면 소수 초를 저장하는 컬럼(risksync·Prisma)의
+				// 마지막 행이 계속 "워터마크보다 큼"이 되어 5분마다 재발송된다
+				"DATE_FORMAT(MAX("+col+"), '%Y-%m-%d %H:%i:%s.%f') FROM "+s.Table+" WHERE "+col+" <= ?",
 			prev, today.Format(dtFmt), now.Format(dtFmt),
 		).Scan(&count, &todayCount, &latest)
 		if err != nil {
