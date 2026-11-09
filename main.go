@@ -32,5 +32,6 @@ func main() {
 	services.StartLiftSync()
 	services.StartDietSync()
 	services.StartReadingSnapshot()
+	services.StartSignupNotify()
 	services.Http()
 }
