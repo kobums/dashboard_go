@@ -27,61 +27,88 @@ type SignupsController struct {
 }
 
 type signupService struct {
-	Key    string
-	Name   string
-	Table  string // db.table — 코드 상수만 (사용자 입력 결합 금지)
-	Column string
-	// Activity — 활동 흔적 SELECT 들. 각각 (u = 유저 id, t = KST datetime) 두 컬럼을 낸다.
+	Key      string
+	Name     string
+	Table    string // db.table — 코드 상수만 (사용자 입력 결합 금지)
+	Column   string
+	IDColumn string // 코호트용 유저 id 컬럼 (GRANT 필요). 활동 소스가 없으면 비워 둔다
+	// Activity — 활동 흔적 소스. SQL 은 (u = 유저 id, t = KST datetime) 두 컬럼을 낸다.
 	// UTC 로 저장된 컬럼은 DATE_ADD(.., INTERVAL 9 HOUR) 로 KST 로 맞춘다. 비어 있으면 활동 집계 없음.
 	// 이력(행)이 쌓이는 것만 넣는다 — "마지막 접속" 처럼 덮어쓰는 값은 지난주·주별 추이를 왜곡하므로 제외.
-	Activity []string
+	// 같은 Label 은 상세 페이지 활동 내역에서 한 줄로 합친다.
+	Activity []activitySource
+}
+
+type activitySource struct {
+	Label string
+	SQL   string
 }
 
 var signupServices = []signupService{
-	{Key: "fotstat", Name: "Fotstat", Table: "fotstat.user_tb", Column: "u_createddate", Activity: []string{
+	{Key: "fotstat", Name: "Fotstat", Table: "fotstat.user_tb", Column: "u_createddate", IDColumn: "u_id", Activity: []activitySource{
 		// 리프레시 토큰은 로그인 때만 생성(비회전), DB 기본값이라 UTC
-		"SELECT rt_user, DATE_ADD(rt_createddate, INTERVAL 9 HOUR) FROM fotstat.refresh_token_tb",
+		{"로그인", "SELECT rt_user, DATE_ADD(rt_createddate, INTERVAL 9 HOUR) FROM fotstat.refresh_token_tb"},
 		// 경기·선수·기록은 팀 소유자 활동
-		"SELECT tm.t_user, m.m_createddate FROM fotstat.match_tb m JOIN fotstat.team_tb tm ON tm.t_id = m.m_team",
-		"SELECT tm.t_user, p.p_createddate FROM fotstat.player_tb p JOIN fotstat.team_tb tm ON tm.t_id = p.p_team",
-		"SELECT tm.t_user, r.r_createddate FROM fotstat.record_tb r JOIN fotstat.quarter_tb q ON q.q_id = r.r_quarter " +
-			"JOIN fotstat.match_tb m ON m.m_id = q.q_match JOIN fotstat.team_tb tm ON tm.t_id = m.m_team",
+		{"경기 등록", "SELECT tm.t_user, m.m_createddate FROM fotstat.match_tb m JOIN fotstat.team_tb tm ON tm.t_id = m.m_team"},
+		{"선수 등록", "SELECT tm.t_user, p.p_createddate FROM fotstat.player_tb p JOIN fotstat.team_tb tm ON tm.t_id = p.p_team"},
+		{"기록 입력", "SELECT tm.t_user, r.r_createddate FROM fotstat.record_tb r JOIN fotstat.quarter_tb q ON q.q_id = r.r_quarter " +
+			"JOIN fotstat.match_tb m ON m.m_id = q.q_match JOIN fotstat.team_tb tm ON tm.t_id = m.m_team"},
 	}},
-	{Key: "snippet", Name: "Snippet", Table: "snippet.user_tb", Column: "u_createdate", Activity: []string{
-		"SELECT rt_user_id, rt_createdate FROM snippet.refreshtoken_tb", // 토큰 갱신마다 새 행
-		"SELECT ub_user, ub_createdate FROM snippet.userbook_tb",
-		"SELECT ub_user, ub_updatedate FROM snippet.userbook_tb",
-		"SELECT rs_user, rs_createdate FROM snippet.readingsession_tb",
-		"SELECT rl_user, rl_createdate FROM snippet.readinglog_tb",
-		"SELECT r_user, r_createdate FROM snippet.record_tb",
-		"SELECT us_user, us_createdate FROM snippet.usersnippet_tb",
-		"SELECT sdv_user, sdv_date FROM snippet.snippet_daily_view_tb",
-		"SELECT ss_user, ss_seendate FROM snippet.snippet_seen_tb",
-		"SELECT s_user, s_createdate FROM snippet.suggestion_tb",
+	{Key: "snippet", Name: "Snippet", Table: "snippet.user_tb", Column: "u_createdate", IDColumn: "u_id", Activity: []activitySource{
+		{"토큰 갱신", "SELECT rt_user_id, rt_createdate FROM snippet.refreshtoken_tb"}, // 갱신마다 새 행
+		{"서재 추가·수정", "SELECT ub_user, ub_createdate FROM snippet.userbook_tb"},
+		{"서재 추가·수정", "SELECT ub_user, ub_updatedate FROM snippet.userbook_tb"},
+		{"독서 세션", "SELECT rs_user, rs_createdate FROM snippet.readingsession_tb"},
+		{"독서 로그", "SELECT rl_user, rl_createdate FROM snippet.readinglog_tb"},
+		{"기록", "SELECT r_user, r_createdate FROM snippet.record_tb"},
+		{"스니펫 저장", "SELECT us_user, us_createdate FROM snippet.usersnippet_tb"},
+		{"스니펫 조회", "SELECT sdv_user, sdv_date FROM snippet.snippet_daily_view_tb"},
+		{"스니펫 조회", "SELECT ss_user, ss_seendate FROM snippet.snippet_seen_tb"},
+		{"건의", "SELECT s_user, s_createdate FROM snippet.suggestion_tb"},
 	}},
-	{Key: "gym", Name: "Gym", Table: "gym.user_tb", Column: "u_date", Activity: []string{
-		"SELECT at_user, at_date FROM gym.attendance_tb",
-		"SELECT wl_user, wl_date FROM gym.workoutlog_tb",
-		"SELECT pr_member, pr_createddate FROM gym.ptreservation_tb",
+	{Key: "gym", Name: "Gym", Table: "gym.user_tb", Column: "u_date", IDColumn: "u_id", Activity: []activitySource{
+		{"출석", "SELECT at_user, at_date FROM gym.attendance_tb"},
+		{"운동 일지", "SELECT wl_user, wl_date FROM gym.workoutlog_tb"},
+		{"PT 예약", "SELECT pr_member, pr_createddate FROM gym.ptreservation_tb"},
 	}},
-	{Key: "tomelater", Name: "Tomelater", Table: "tomelater.user_tb", Column: "u_createdat", Activity: []string{
-		"SELECT a_uid, a_createdat FROM tomelater.answer_tb",
-		"SELECT a_uid, a_updatedat FROM tomelater.answer_tb",
+	{Key: "tomelater", Name: "Tomelater", Table: "tomelater.user_tb", Column: "u_createdat", IDColumn: "u_id", Activity: []activitySource{
+		{"답변 작성·수정", "SELECT a_uid, a_createdat FROM tomelater.answer_tb"},
+		{"답변 작성·수정", "SELECT a_uid, a_updatedat FROM tomelater.answer_tb"},
 	}},
-	{Key: "project", Name: "Project", Table: "project.user_tb", Column: "u_date", Activity: []string{
-		"SELECT b_user, b_date FROM project.board_tb",
+	{Key: "project", Name: "Project", Table: "project.user_tb", Column: "u_date", IDColumn: "u_id", Activity: []activitySource{
+		{"게시글", "SELECT b_user, b_date FROM project.board_tb"},
 	}},
 	{Key: "risksync", Name: "RiskSync", Table: "risksync.RS_USER", Column: "CREATED_AT"}, // 유저별 활동 기록 없음
-	{Key: "safelog", Name: "Safelog", Table: "safelog.user_tb", Column: "u_date", Activity: []string{
-		"SELECT r_user, r_date FROM safelog.report_tb",
+	{Key: "safelog", Name: "Safelog", Table: "safelog.user_tb", Column: "u_date", IDColumn: "u_id", Activity: []activitySource{
+		{"리포트", "SELECT r_user, r_date FROM safelog.report_tb"},
 	}},
 	{Key: "dday", Name: "D-Day", Table: "dday.users_tb", Column: "u_created_at"}, // ddays_tb 에 유저 컬럼 없음
-	{Key: "selfmanagement", Name: "Selfmanagement", Table: "selfmanagement.`user`", Column: "created_at", Activity: []string{
+	{Key: "selfmanagement", Name: "Selfmanagement", Table: "selfmanagement.`user`", Column: "created_at", IDColumn: "user_id", Activity: []activitySource{
 		// Prisma — UTC
-		"SELECT user_id, DATE_ADD(created_at, INTERVAL 9 HOUR) FROM selfmanagement.routine",
-		"SELECT r.user_id, DATE_ADD(i.created_at, INTERVAL 9 HOUR) FROM selfmanagement.routine_instance i " +
-			"JOIN selfmanagement.routine r ON r.routine_id = i.routine_id",
+		{"루틴 생성", "SELECT user_id, DATE_ADD(created_at, INTERVAL 9 HOUR) FROM selfmanagement.routine"},
+		{"루틴 수행", "SELECT r.user_id, DATE_ADD(i.created_at, INTERVAL 9 HOUR) FROM selfmanagement.routine_instance i " +
+			"JOIN selfmanagement.routine r ON r.routine_id = i.routine_id"},
 	}},
+}
+
+func FindSignupService(key string) *signupService {
+	for i := range signupServices {
+		if signupServices[i].Key == key {
+			return &signupServices[i]
+		}
+	}
+	return nil
+}
+
+// activityUnion — 소스들을 (u, t) 파생 테이블 하나로. MariaDB 10.11 은 "a (u, t)" 파생 컬럼 목록 미지원 →
+// 빈 첫 SELECT 로 컬럼 이름을 정한다.
+func activityUnion(sources []activitySource) string {
+	parts := make([]string, len(sources))
+	for i, src := range sources {
+		parts[i] = src.SQL
+	}
+	return "(SELECT 0 AS u, CAST(NULL AS DATETIME) AS t FROM DUAL WHERE 1 = 0 UNION ALL " +
+		strings.Join(parts, " UNION ALL ") + ") a"
 }
 
 const signupWeeks = 8
@@ -250,9 +277,7 @@ func fetchActivity(conn *models.Connection, s signupService, now time.Time) *act
 		idx[st.Weekly[i].Start] = i
 	}
 
-	// MariaDB 10.11 은 파생 테이블 컬럼 목록 "a (u, t)" 미지원 — 빈 첫 SELECT 로 컬럼 이름을 정한다.
-	union := "(SELECT 0 AS u, CAST(NULL AS DATETIME) AS t FROM DUAL WHERE 1 = 0 UNION ALL " +
-		strings.Join(s.Activity, " UNION ALL ") + ") a"
+	union := activityUnion(s.Activity)
 	var last *string
 	err := conn.Conn.QueryRow(
 		"SELECT COUNT(DISTINCT CASE WHEN t >= ? THEN u END), COUNT(DISTINCT CASE WHEN t >= ? THEN u END), "+
