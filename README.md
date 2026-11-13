@@ -40,7 +40,7 @@ dashboard_go.sql      DDL 원본 (dashboard DB)
 |---|---|---|
 | GET | `/api/ping` | 헬스체크 (인증 없음) |
 | POST | `/api/health/ingest` | Health Auto Export 형식 수신 — `api-key: <HEALTH_INGEST_TOKEN>`. 누적 지표(걸음·활동 에너지·운동 시간 등)는 같은 날 점들을 합산(시간 단위 그룹핑 대응), kJ→kcal·m/mi→km 변환, id 없는 구버전 운동은 시작시각+이름으로 멱등 |
-| POST | `/api/health/shortcut` | **iOS 단축어용** 평평한 JSON `{date?, steps, weight, ...}` — `api-key` 헤더. 값 0/누락 스킵, `"72.4 kg"` 같은 문자열도 파싱, 여러 값(배열·줄바꿈)은 누적 지표면 합·아니면 마지막 값, 날짜는 `2026. 10. 20.`·`2026년 10월 20일` 같은 한국어 형식도 허용, (date,name) upsert 멱등 |
+| POST | `/api/health/shortcut` | **iOS 단축어용** 평평한 JSON `{date?, steps, weight, ...}` — `api-key` 헤더. 값 0/누락 스킵, `"72.4 kg"` 같은 문자열도 파싱, 여러 값(배열·줄바꿈)은 누적 지표면 합·아니면 마지막 값, 날짜는 `2026. 10. 20.`·`2026년 10월 20일` 같은 한국어 형식도 허용, (date,name) upsert 멱등. **여러 날 모드**: `steps` 와 함께 `steps_dates`(같은 줄 수의 날짜 목록)를 보내면 줄 단위로 짝지어 날짜별 저장 — 누적 지표는 같은 날 합산 후 가장 오래된 날(도중부터 잘린 날)은 버림, 개수 불일치·날짜 오류는 그 지표 통째로 거부 |
 | GET | `/api/health/metrics?from=&to=&name=` | 일별 지표 시계열 |
 | CRUD | `/api/workout(/:id)` | 운동 기록 (생성 CRUD, `startworkoutdate`/`endworkoutdate` 필터) |
 | GET | `/api/compare?date=` | **통합 같은 요일 비교** (운동·독서·개발 공용) — 기준일/전날/−7d/−28d/−364d(52주). 지표: steps·activeEnergy·exerciseMinutes·workout(분·건수)·devCommits·readingMinutes·readingPages. 기준일 데이터 전무하면 어제 폴백. null=데이터 없음, 0과 구분. 응답은 기준일별 5분 메모이즈(stale 반환+백그라운드 갱신) |
