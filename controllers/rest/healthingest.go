@@ -200,10 +200,31 @@ func (c *HealthIngestController) IngestShortcut(body []byte) {
 
 	count := 0
 	for key, val := range raw {
-		if key == "date" {
+		if key == "date" || strings.HasSuffix(key, shortcutDatesSuffix) {
 			continue
 		}
 		name := normalizeMetricName(key)
+
+		// 여러 날 모드: "<키>_dates" 가 같이 오면 값과 날짜를 줄 단위로 짝지어 날짜별로 저장한다.
+		if dates, ok := raw[key+shortcutDatesSuffix]; ok {
+			daily, err := shortcutDailyValues(name, val, dates)
+			if err != nil {
+				log.Error().Str("key", key).Msg("shortcut ingest: " + err.Error())
+				continue
+			}
+			saved := 0
+			for day, qty := range daily {
+				if err := upsertMetric(conn, day, name, qty, ""); err != nil {
+					log.Error().Str("metric", name).Msg(err.Error())
+					continue
+				}
+				saved++
+			}
+			count += saved
+			log.Info().Str("metric", name).Int("days", saved).Msg("shortcut ingest: 여러 날 저장")
+			continue
+		}
+
 		qty, ok := shortcutValue(name, val)
 		if !ok || qty == 0 {
 			log.Info().Str("key", key).Str("value", truncate(fmt.Sprint(val), 100)).Msg("shortcut ingest: 값 없음/형식 오류로 건너뜀")
@@ -219,6 +240,78 @@ func (c *HealthIngestController) IngestShortcut(body []byte) {
 	log.Info().Str("date", date).Int("saved", count).Msg("shortcut ingest received")
 	c.Set("metrics", count)
 	c.Set("date", date)
+}
+
+// 여러 날 모드의 날짜 키 접미사 — 예: "steps" 값 목록과 짝이 되는 "steps_dates".
+const shortcutDatesSuffix = "_dates"
+
+// shortcutParts 는 단축어 값 하나를 낱개 목록으로 편다 (배열, 줄바꿈으로 이어진 문자열, 단일 값).
+func shortcutParts(v interface{}) []interface{} {
+	switch n := v.(type) {
+	case []interface{}:
+		return n
+	case string:
+		var parts []interface{}
+		for _, line := range strings.Split(strings.TrimSpace(n), "\n") {
+			if strings.TrimSpace(line) != "" {
+				parts = append(parts, line)
+			}
+		}
+		return parts
+	case nil:
+		return nil
+	}
+	return []interface{}{v}
+}
+
+// shortcutDailyValues 는 여러 날 모드의 값 목록과 날짜 목록을 순서대로 짝지어 날짜별 하루 값으로 모은다.
+// 「건강 샘플 찾기(지난 N일)」의 값과 시작 날짜를 그대로 넣으면 되도록 — 일 단위로 묶였든 원본 샘플이든 받는다.
+// 누적 지표는 같은 날 값을 더하고, 나머지는 그날 마지막 값을 쓴다. 값이 0인 날은 저장하지 않는다.
+//
+// 누적 지표는 가장 오래된 날을 버린다: 「지난 7일」은 지금 시각 기준이라 첫날이 도중부터 잘려 있어,
+// 그대로 저장하면 이미 맞게 들어간 하루 값을 작은 값으로 덮는다. (날짜가 하루뿐이면 그대로 둔다)
+func shortcutDailyValues(name string, values, dates interface{}) (map[string]float64, error) {
+	valueParts, dateParts := shortcutParts(values), shortcutParts(dates)
+	if len(valueParts) != len(dateParts) {
+		return nil, fmt.Errorf("%s 값 %d개와 날짜 %d개의 개수가 달라 저장하지 않음", name, len(valueParts), len(dateParts))
+	}
+
+	cumulative := cumulativeMetrics[name]
+	daily := map[string]float64{}
+	seen := map[string]bool{}
+	for i, part := range valueParts {
+		rawDate := fmt.Sprint(dateParts[i])
+		day, ok := parseShortcutDate(rawDate)
+		if !ok {
+			return nil, fmt.Errorf("%s 날짜 형식을 읽지 못해 저장하지 않음: %s", name, truncate(rawDate, 40))
+		}
+		seen[day] = true
+		qty, ok := toFloat(part)
+		if !ok {
+			continue
+		}
+		if cumulative {
+			daily[day] += qty
+		} else {
+			daily[day] = qty
+		}
+	}
+
+	if cumulative && len(seen) > 1 {
+		oldest := ""
+		for day := range seen {
+			if oldest == "" || day < oldest {
+				oldest = day
+			}
+		}
+		delete(daily, oldest)
+	}
+	for day, qty := range daily {
+		if qty == 0 {
+			delete(daily, day)
+		}
+	}
+	return daily, nil
 }
 
 var numberPattern = regexp.MustCompile(`-?\d+(\.\d+)?`)
@@ -244,22 +337,8 @@ func toFloat(v interface{}) (float64, bool) {
 // 「건강 샘플 찾기」 결과를 그대로 넣으면 배열이나 줄바꿈으로 이어진 여러 값이 온다 —
 // 누적 지표(걸음 등)는 더하고, 나머지(체중 등)는 마지막 값을 쓴다.
 func shortcutValue(name string, v interface{}) (float64, bool) {
-	var parts []interface{}
-	switch n := v.(type) {
-	case []interface{}:
-		parts = n
-	case string:
-		for _, line := range strings.Split(strings.TrimSpace(n), "\n") {
-			if strings.TrimSpace(line) != "" {
-				parts = append(parts, line)
-			}
-		}
-	default:
-		parts = []interface{}{v}
-	}
-
 	total, found := 0.0, false
-	for _, p := range parts {
+	for _, p := range shortcutParts(v) {
 		f, ok := toFloat(p)
 		if !ok {
 			continue
